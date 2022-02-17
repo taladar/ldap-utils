@@ -43,9 +43,6 @@ version = "0.10"
 [dependencies.dirs]
 version = "2.0"
 
-[dependencies.simple-error]
-version = "0.2.3"
-
 [dependencies.native-tls]
 version = "0.2"
 
@@ -68,3 +65,6 @@ features = [ "full" ]
 
 [dependencies.oid]
 version = "0.2.1"
+
+[dependencies.thiserror]
+version = "1.0.30"

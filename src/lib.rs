@@ -22,8 +22,6 @@
 #![deny(clippy::mod_module_files)]
 #![doc = include_str!("../README.md")]
 
-use std::error::Error;
-
 use chumsky::Parser;
 use ldap_types::basic::RootDSE;
 use ldap_types::schema::{
@@ -31,7 +29,6 @@ use ldap_types::schema::{
     object_class_parser, AttributeType, LDAPSchema, LDAPSyntax, MatchingRule, MatchingRuleUse,
     ObjectClass,
 };
-use simple_error::bail;
 
 use ldap3::exop::{WhoAmI, WhoAmIResp};
 use ldap3::result::SearchResult;
@@ -63,6 +60,8 @@ use std::convert::TryInto;
 
 use ariadne::{Color, Fmt, Label, Report, ReportKind, Source};
 
+use thiserror::Error;
+
 /// creates a noop_control object for use with ldap3
 ///
 /// the noop_control is supposed to perform the same operation
@@ -80,14 +79,22 @@ pub fn noop_control() -> ldap3::controls::RawControl {
     }
 }
 
+/// error which can occur while parsing a scope
+#[derive(Debug, Clone, Error)]
+pub enum ScopeParserError {
+    /// could not parse the value as a scope
+    #[error("Could not parse {0} as an ldap scope")]
+    CouldNotParseAsScope(String),
+}
+
 /// parse an [ldap3::Scope] from the string one would specify to use the same
 /// scope with OpenLDAP's ldapsearch -s parameter
-pub fn parse_scope(src: &str) -> Result<ldap3::Scope, Box<dyn Error>> {
+pub fn parse_scope(src: &str) -> Result<ldap3::Scope, ScopeParserError> {
     match src {
         "base" => Ok(ldap3::Scope::Base),
         "one" => Ok(ldap3::Scope::OneLevel),
         "sub" => Ok(ldap3::Scope::Subtree),
-        s => bail!("Could not convert {} to ldap3::Scope", s),
+        s => Err(ScopeParserError::CouldNotParseAsScope(s.to_string())),
     }
 }
 
@@ -105,12 +112,23 @@ pub struct ConnectParameters {
     pub url: std::string::String,
 }
 
+/// errors which can happen when trying to retrieve connect parameters from openldap config
+#[derive(Debug, Error)]
+pub enum OpenLdapConnectParameterError {
+    /// an error when compiling or using a regular expression
+    #[error("regex error: {0}")]
+    RegexError(#[from] regex::Error),
+    /// an I/O error
+    #[error("I/O error: {0}")]
+    IOError(#[from] std::io::Error),
+}
+
 /// try to detect OpenLDAP connect parameters from its config files
 /// (ldap.conf in /etc/ldap or /etc/openldap and .ldaprc in the user home dir)
 #[instrument(skip(builder))]
 pub fn openldap_connect_parameters(
     builder: &mut ConnectParametersBuilder,
-) -> Result<&mut ConnectParametersBuilder, Box<dyn Error>> {
+) -> Result<&mut ConnectParametersBuilder, OpenLdapConnectParameterError> {
     let ldap_rc_content;
     let ldap_conf_content;
     if let Some(d) = home_dir() {
@@ -171,7 +189,7 @@ pub fn openldap_connect_parameters(
 #[instrument(skip(builder))]
 pub fn default_connect_parameters(
     builder: &mut ConnectParametersBuilder,
-) -> Result<&mut ConnectParametersBuilder, Box<dyn Error>> {
+) -> &mut ConnectParametersBuilder {
     if builder.ca_cert_path.is_none() {
         builder.ca_cert_path("ca.crt".to_string());
     }
@@ -181,24 +199,62 @@ pub fn default_connect_parameters(
     if builder.client_key_path.is_none() {
         builder.client_key_path("client.key".to_string());
     }
-    Ok(builder)
+    builder
+}
+
+/// error which can happen while reading connect parameters from a file
+#[derive(Debug, Error)]
+pub enum TomlConfigError {
+    /// an I/O error
+    #[error("I/O error: {0}")]
+    IOError(#[from] std::io::Error),
+    /// an error deserializing the TOML file
+    #[error("Toml deserialization error: {0}")]
+    TomlError(#[from] toml::de::Error),
 }
 
 /// load ldap connect parameters from a toml file
 #[instrument]
 pub fn toml_connect_parameters(
     filename: std::path::PathBuf,
-) -> Result<ConnectParameters, Box<dyn Error>> {
+) -> Result<ConnectParameters, TomlConfigError> {
     let config = std::fs::read_to_string(filename)?;
     let result: ConnectParameters = toml::from_str(&config)?;
 
     Ok(result)
 }
 
+/// errors which can happen when connecting to an LDAP server
+#[derive(Debug, Error)]
+pub enum ConnectError {
+    /// an error when building the parameters, most likely a value
+    /// that could not be retrieved from any config source
+    #[error("Parameters builder error: {0}")]
+    ParametersBuilderError(#[from] ConnectParametersBuilderError),
+    /// an error when trying to retrieve connect parameters from OpenLDAP config files
+    #[error("Error retrieving OpenLDAP connect parameters: {0}")]
+    OpenLdapConnectParameterError(#[from] OpenLdapConnectParameterError),
+    /// an I/O error
+    #[error("I/O error: {0}")]
+    IOError(#[from] std::io::Error),
+    /// an error in the native_tls crate
+    #[error("Native TLS error: {0}")]
+    NativeTLSError(#[from] native_tls::Error),
+    /// an error in the ldap3 crate
+    #[error("ldap3 Ldap error: {0}")]
+    LdapError(#[from] ldap3::LdapError),
+    /// an error when compiling or using a regular expression
+    #[error("regex error: {0}")]
+    RegexError(#[from] regex::Error),
+    /// an error in the openssl library used to read certificates and keys
+    #[error("openssl error: {0}")]
+    OpenSSLError(#[from] openssl::error::ErrorStack),
+}
+
 /// try to connect to an LDAP server using ldap3 using the OpenLDAP config files
 /// supplemented by hardcoded default values
 #[instrument]
-pub async fn connect() -> Result<(Ldap, std::string::String), Box<dyn Error>> {
+pub async fn connect() -> Result<(Ldap, std::string::String), ConnectError> {
     let mut builder = ConnectParametersBuilder::default();
     openldap_connect_parameters(&mut builder)?;
     match builder.build() {
@@ -208,12 +264,12 @@ pub async fn connect() -> Result<(Ldap, std::string::String), Box<dyn Error>> {
                 "Building of ConnectParameters based on OpenLDAP config files failed: {}",
                 err_msg
             );
-            let builder = default_connect_parameters(&mut builder)?;
+            let builder = default_connect_parameters(&mut builder);
             match builder.build() {
                 Ok(result) => connect_with_parameters(result).await,
                 Err(err) => {
                     tracing::error!("Building of ConnectParameters based on OpenLDAP config files and substituting default values for missing values failed: {}", err);
-                    Err(Box::new(err) as Box<dyn Error>)
+                    Err(ConnectError::ParametersBuilderError(err))
                 }
             }
         }
@@ -224,7 +280,7 @@ pub async fn connect() -> Result<(Ldap, std::string::String), Box<dyn Error>> {
 #[instrument]
 pub async fn connect_with_parameters(
     connect_parameters: ConnectParameters,
-) -> Result<(Ldap, std::string::String), Box<dyn Error>> {
+) -> Result<(Ldap, std::string::String), ConnectError> {
     let mut client_cert_contents = Vec::new();
     {
         let mut file = File::open(connect_parameters.client_cert_path)?;
@@ -263,6 +319,17 @@ pub async fn connect_with_parameters(
     Ok((ldap, base_dn))
 }
 
+/// an error during normal ldap operations (search, add, modify, update, delete,...)
+#[derive(Debug, Error)]
+pub enum LdapOperationError {
+    /// an error in the ldap3 library
+    #[error("ldap3 Ldap error: {0}")]
+    LdapError(#[from] ldap3::LdapError),
+    /// and error parsing an OID
+    #[error("OID error: {0}")]
+    OIDError(#[from] OIDError),
+}
+
 /// perform an LDAP search via ldap3, logging a proper error message if it fails
 /// and returning an iterator to already unwrapped search entries
 pub async fn ldap_search<'a, S: AsRef<str> + Clone + Display + Debug + Send + Sync>(
@@ -271,7 +338,7 @@ pub async fn ldap_search<'a, S: AsRef<str> + Clone + Display + Debug + Send + Sy
     scope: Scope,
     filter: &str,
     attrs: Vec<S>,
-) -> Result<Box<dyn Iterator<Item = SearchEntry> + 'a>, Box<dyn Error>> {
+) -> Result<Box<dyn Iterator<Item = SearchEntry> + 'a>, LdapOperationError> {
     let search_result = ldap.search(base, scope, filter, attrs.clone()).await?;
     let SearchResult(_rs, res) = &search_result;
     if res.rc != 0 {
@@ -297,7 +364,7 @@ pub async fn ldap_search<'a, S: AsRef<str> + Clone + Display + Debug + Send + Sy
 /// an error type in case parsing an OID fails when querying the RootDSE from ldap3
 /// during the parsing of supported controls, extensions and features
 #[derive(Debug)]
-struct OIDError(oid::ObjectIdentifierError);
+pub struct OIDError(oid::ObjectIdentifierError);
 
 impl Display for OIDError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -306,14 +373,14 @@ impl Display for OIDError {
 }
 
 impl std::error::Error for OIDError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         None
     }
 }
 
 /// retrieve the [RootDSE] from an LDAP server using ldap3
 #[instrument(skip(ldap))]
-pub async fn query_root_dse(ldap: &mut Ldap) -> Result<Option<RootDSE>, Box<dyn Error>> {
+pub async fn query_root_dse(ldap: &mut Ldap) -> Result<Option<RootDSE>, LdapOperationError> {
     let mut it = ldap_search(
         ldap,
         "",
@@ -379,7 +446,7 @@ pub async fn query_root_dse(ldap: &mut Ldap) -> Result<Option<RootDSE>, Box<dyn 
 /// a wrapped error in case parsing fails when retrieving the [LDAPSchema]
 /// from an ldap3 server.
 #[derive(Debug)]
-struct ChumskyError(Vec<chumsky::error::Simple<char>>);
+pub struct ChumskyError(Vec<chumsky::error::Simple<char>>);
 
 impl Display for ChumskyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -388,7 +455,7 @@ impl Display for ChumskyError {
 }
 
 impl std::error::Error for ChumskyError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         None
     }
 }
@@ -457,11 +524,22 @@ pub fn print_errors(src: &str, errs: &[chumsky::error::Simple<char>]) {
     });
 }
 
+/// error which can happen while retrieving and parsing the LDAP schema
+#[derive(Debug, Error)]
+pub enum LdapSchemaError {
+    /// an error in the ldap operations performed while retrieving the schema
+    #[error("Ldap operation error: {0}")]
+    LdapOperationError(#[from] LdapOperationError),
+    /// an error while parsing the retrieved schema
+    #[error("chumsky parser error: {0}")]
+    ChumskyError(#[from] ChumskyError),
+}
+
 /// Retrieve the LDAP schema from an LDAP server using ldap3
 ///
 /// tested with OpenLDAP
 #[instrument(skip(ldap))]
-pub async fn query_ldap_schema(ldap: &mut Ldap) -> Result<Option<LDAPSchema>, Box<dyn Error>> {
+pub async fn query_ldap_schema(ldap: &mut Ldap) -> Result<Option<LDAPSchema>, LdapSchemaError> {
     if let Some(root_dse) = query_root_dse(ldap).await? {
         let mut it = ldap_search(
             ldap,
@@ -580,7 +658,7 @@ pub async fn delete_recursive(
     ldap: &mut Ldap,
     dn: &str,
     controls: Vec<ldap3::controls::RawControl>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), LdapOperationError> {
     tracing::debug!("Deleting {} recursively", dn);
     let it = ldap_search(
         ldap,
