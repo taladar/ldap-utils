@@ -6,8 +6,9 @@ license = "MIT/Apache-2.0"
 version = "0.1.0"
 authors = ["Matthias Hörmann <mhoermann@gmail.com>"]
 edition = "2021"
-publish = false
-
+repository = "https://github.com/taladar/ldap-utils"
+keywords = [ "ldap", "schema", "ldap3" ]
+categories = [ "parsing" ]
 exclude = [ ".env", "tarpaulin-report.html", "tarpaulin-report.json" ]
 
 [profile.release]
@@ -25,7 +26,7 @@ version = "0.5.8"
 version = "0.1.30"
 
 [dependencies.ldap-types]
-path="../ldap-types"
+version = "0.1.0"
 
 [dependencies.ldap3]
 version = "0.9"
