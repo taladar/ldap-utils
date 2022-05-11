@@ -22,8 +22,12 @@
 #![deny(clippy::mod_module_files)]
 #![doc = include_str!("../README.md")]
 
+use lazy_static::lazy_static;
+
+use diff::{Diff, VecDiffType};
+
 use chumsky::Parser;
-use ldap_types::basic::RootDSE;
+use ldap_types::basic::{LDAPEntry, LDAPOperation, OIDWithLength, RootDSE};
 use ldap_types::schema::{
     attribute_type_parser, ldap_syntax_parser, matching_rule_parser, matching_rule_use_parser,
     object_class_parser, AttributeType, LDAPSchema, LDAPSyntax, MatchingRule, MatchingRuleUse,
@@ -34,7 +38,9 @@ use ldap3::exop::{WhoAmI, WhoAmIResp};
 use ldap3::result::SearchResult;
 use ldap3::{Ldap, LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 use native_tls::{Certificate, Identity, TlsConnector};
+use oid::ObjectIdentifier;
 
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fmt::Display;
 
@@ -342,14 +348,15 @@ pub async fn ldap_search<'a, S: AsRef<str> + Clone + Display + Debug + Send + Sy
     let search_result = ldap.search(base, scope, filter, attrs.clone()).await?;
     let SearchResult(_rs, res) = &search_result;
     if res.rc != 0 {
-        tracing::error!(
-            "Error in LDAP query\n  base: {}\n  scope: {:?}\n  filter: {}\n  attrs: {:#?}",
+        tracing::debug!(
+            "Non-zero return code {} in LDAP query\n  base: {}\n  scope: {:?}\n  filter: {}\n  attrs: {:#?}",
+            res.rc,
             base,
             scope,
             filter,
             attrs
         );
-        tracing::error!(
+        tracing::debug!(
             "ldapsearch -Q -LLL -o ldif-wrap=no -b '{}' -s {} '{}' {}",
             base,
             format!("{:?}", scope).to_lowercase(),
@@ -679,4 +686,448 @@ pub async fn delete_recursive(
         success_or_noop_success(ldap.with_controls(controls.to_owned()).delete(&dn).await?)?;
     }
     Ok(())
+}
+
+/// of the same modify operation because otherwise we might successfully apply the textual modifications
+/// and then fail on the binary ones, leaving behind a half-modified object
+pub fn mods_as_bin_mods<'a, T>(mods: T) -> Vec<ldap3::Mod<Vec<u8>>>
+where
+    T: IntoIterator<Item = &'a ldap3::Mod<String>>,
+{
+    let mut result: Vec<ldap3::Mod<Vec<u8>>> = vec![];
+    for m in mods {
+        match m {
+            ldap3::Mod::Add(k, v) => {
+                result.push(ldap3::Mod::Add(
+                    k.as_bytes().to_vec(),
+                    v.iter().map(|s| s.as_bytes().to_vec()).collect(),
+                ));
+            }
+            ldap3::Mod::Delete(k, v) => {
+                result.push(ldap3::Mod::Delete(
+                    k.as_bytes().to_vec(),
+                    v.iter().map(|s| s.as_bytes().to_vec()).collect(),
+                ));
+            }
+            ldap3::Mod::Replace(k, v) => {
+                result.push(ldap3::Mod::Replace(
+                    k.as_bytes().to_vec(),
+                    v.iter().map(|s| s.as_bytes().to_vec()).collect(),
+                ));
+            }
+            ldap3::Mod::Increment(k, v) => {
+                result.push(ldap3::Mod::Increment(
+                    k.as_bytes().to_vec(),
+                    v.as_bytes().to_vec(),
+                ));
+            }
+        }
+    }
+    result
+}
+
+/// apply the LDAP operations on a given LDAP server.
+///
+/// The operations should not include the Base-DN in its internally stored DNs
+/// It will be added automatically. This allows for easier generation of comparisons
+/// between objects on two different LDAP servers with different base DNs.
+#[instrument(skip(ldap, ldap_operations))]
+pub async fn apply_ldap_operations(
+    ldap: &mut Ldap,
+    ldap_base_dn: &str,
+    ldap_operations: &[LDAPOperation],
+    controls: Vec<ldap3::controls::RawControl>,
+) -> Result<(), LdapOperationError> {
+    tracing::debug!(
+        "The following operations use the LDAP controls: {:#?}",
+        controls
+    );
+    for op in ldap_operations {
+        match op {
+            LDAPOperation::Add(LDAPEntry {
+                dn,
+                attrs,
+                bin_attrs,
+            }) => {
+                let full_dn = format!("{},{}", dn, ldap_base_dn);
+                tracing::debug!(
+                    "Adding LDAP entry at {} with attributes\n{:#?}\nand binary attributes\n{:#?}",
+                    &full_dn,
+                    attrs,
+                    bin_attrs
+                );
+                // we need to perform the add in one operation or we will run into problems with
+                // objectclass requirements
+                let mut combined_attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = bin_attrs
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.to_owned().as_bytes().to_vec(),
+                            v.iter().map(|s| s.to_owned()).collect::<HashSet<Vec<u8>>>(),
+                        )
+                    })
+                    .collect();
+                combined_attrs.extend(attrs.iter().map(|(k, v)| {
+                    (
+                        k.to_owned().as_bytes().to_vec(),
+                        v.iter()
+                            .map(|s| s.as_bytes().to_vec())
+                            .collect::<HashSet<Vec<u8>>>(),
+                    )
+                }));
+                ldap.with_controls(controls.to_owned())
+                    .add(&full_dn, combined_attrs)
+                    .await?
+                    .success()?;
+            }
+            LDAPOperation::Delete { dn } => {
+                let full_dn = format!("{},{}", dn, ldap_base_dn);
+                tracing::debug!("Deleting LDAP entry at {}", &full_dn);
+                delete_recursive(ldap, &full_dn, controls.to_owned()).await?;
+            }
+            LDAPOperation::Modify { dn, mods, bin_mods } => {
+                let full_dn = format!("{},{}", dn, ldap_base_dn);
+                tracing::debug!("Modifying LDAP entry at {} with modifications\n{:#?}\nand binary modifications\n{:#?}", &full_dn, mods, bin_mods);
+                let mut combined_mods = bin_mods.to_owned();
+                combined_mods.extend(mods_as_bin_mods(mods));
+                ldap.with_controls(controls.to_owned())
+                    .modify(&full_dn, combined_mods.to_vec())
+                    .await?
+                    .success()?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// helper function to search an LDAP server and generate [LDAPEntry] values
+/// with the base DN removed to make them server-independent
+#[instrument(skip(ldap, entries))]
+pub async fn search_entries(
+    ldap: &mut Ldap,
+    base_dn: &str,
+    search_base: &str,
+    scope: ldap3::Scope,
+    filter: &str,
+    attrs: &[String],
+    entries: &mut HashMap<String, LDAPEntry>,
+) -> Result<(), LdapOperationError> {
+    let it = ldap_search(
+        ldap,
+        &format!("{},{}", search_base, base_dn),
+        scope,
+        filter,
+        attrs.to_owned(),
+    )
+    .await?;
+    for entry in it {
+        tracing::debug!("Found entry {}", entry.dn);
+        if let Some(s) = entry.dn.strip_suffix(&format!(",{}", &base_dn)) {
+            entries.insert(
+                s.to_string(),
+                LDAPEntry {
+                    dn: s.to_string(),
+                    attrs: entry.attrs,
+                    bin_attrs: entry.bin_attrs,
+                },
+            );
+        } else {
+            tracing::error!(
+                "Failed to remove base dn {} from entry DN {}",
+                base_dn,
+                entry.dn
+            );
+        }
+    }
+    Ok(())
+}
+
+/// generate an [ldap3::Mod] if there is a DN-valued attribute in the source
+/// entry that needs its base DN translated to the destination base DN
+#[instrument(skip(
+    source_entry,
+    source_ldap_schema,
+    source_base_dn,
+    destination_entry,
+    destination_base_dn,
+    ignore_object_classes,
+))]
+pub fn mod_value(
+    attr_name: &str,
+    source_entry: &LDAPEntry,
+    source_ldap_schema: &LDAPSchema,
+    source_base_dn: &str,
+    destination_entry: Option<&LDAPEntry>,
+    destination_base_dn: &str,
+    ignore_object_classes: &[String],
+) -> Option<ldap3::Mod<String>> {
+    lazy_static! {
+        static ref DN_SYNTAX_OID: OIDWithLength = OIDWithLength {
+            oid: ObjectIdentifier::try_from("1.3.6.1.4.1.1466.115.121.1.12").unwrap(),
+            length: None
+        };
+    }
+    if let Some(values) = source_entry.attrs.get(attr_name) {
+        let mut replacement_values = HashSet::from_iter(values.iter().cloned());
+        if attr_name == "objectClass" {
+            for io in ignore_object_classes {
+                replacement_values.remove(io);
+            }
+        }
+        let attr_type_syntax =
+            source_ldap_schema.find_attribute_type_property(attr_name, |at| at.syntax.as_ref());
+        tracing::trace!(
+            "Attribute type syntax for altered attribute {}: {:#?}",
+            attr_name,
+            attr_type_syntax
+        );
+        if let Some(syntax) = attr_type_syntax {
+            if DN_SYNTAX_OID.eq(syntax) {
+                tracing::trace!(
+                    "Replacing base DN {} with base DN {}",
+                    source_base_dn,
+                    destination_base_dn
+                );
+                replacement_values = replacement_values
+                    .into_iter()
+                    .map(|s| s.replace(source_base_dn, destination_base_dn))
+                    .collect();
+            }
+        }
+        if let Some(destination_entry) = destination_entry {
+            if let Some(destination_values) = destination_entry.attrs.get(attr_name) {
+                let mut replacement_values_sorted: Vec<String> =
+                    replacement_values.iter().cloned().collect();
+                replacement_values_sorted.sort();
+                let mut destination_values: Vec<String> = destination_values.to_vec();
+                destination_values.sort();
+                tracing::trace!("Checking if replacement values and destination values are identical (case sensitive):\n{:#?}\n{:#?}", destination_values, replacement_values_sorted);
+                if replacement_values_sorted == destination_values {
+                    tracing::trace!("Skipping attribute {} because replacement values and destination values are identical (case sensitive)", attr_name);
+                    return None;
+                }
+                let attr_type_equality = source_ldap_schema
+                    .find_attribute_type_property(attr_name, |at| at.equality.as_ref());
+                tracing::trace!(
+                    "Attribute type equality for altered attribute {}: {:#?}",
+                    attr_name,
+                    attr_type_equality
+                );
+                if let Some(equality) = &attr_type_equality {
+                    if equality.describes_case_insensitive_match() {
+                        let mut lower_destination_values: Vec<String> = destination_values
+                            .iter()
+                            .map(|s| s.to_lowercase())
+                            .collect();
+                        lower_destination_values.sort();
+                        let mut lower_replacement_values: Vec<String> = replacement_values
+                            .iter()
+                            .map(|s| s.to_lowercase())
+                            .collect();
+                        lower_replacement_values.sort();
+                        tracing::trace!("Checking if replacement values and destination values are identical (case insensitive):\n{:#?}\n{:#?}", lower_destination_values, lower_replacement_values);
+                        if lower_destination_values == lower_replacement_values {
+                            tracing::trace!("Skipping attribute {} because replacement values and destination values are identical (case insensitive)", attr_name);
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+        Some(ldap3::Mod::Replace(
+            attr_name.to_string(),
+            replacement_values,
+        ))
+    } else {
+        Some(ldap3::Mod::Delete(attr_name.to_string(), HashSet::new()))
+    }
+}
+
+/// diff two sets of LDAPEntries which had their base DNs removed
+/// and generates LDAP operations (add, update, delete) to apply to
+/// the destination to make it identical to the source
+#[allow(clippy::too_many_arguments)]
+#[instrument(skip(source_ldap_schema))]
+pub fn diff_entries(
+    source_entries: &HashMap<String, LDAPEntry>,
+    destination_entries: &HashMap<String, LDAPEntry>,
+    source_base_dn: &str,
+    destination_base_dn: &str,
+    ignore_object_classes: &[String],
+    ignore_attributes: &[String],
+    source_ldap_schema: &LDAPSchema,
+    add: bool,
+    update: bool,
+    delete: bool,
+) -> Vec<LDAPOperation> {
+    lazy_static! {
+        static ref DN_SYNTAX_OID: OIDWithLength = OIDWithLength {
+            oid: ObjectIdentifier::try_from("1.3.6.1.4.1.1466.115.121.1.12").unwrap(),
+            length: None
+        };
+    }
+    let diff = Diff::diff(source_entries, destination_entries);
+    tracing::trace!("Diff:\n{:#?}", diff);
+    let mut ldap_operations: Vec<LDAPOperation> = vec![];
+    for (altered_dn, change) in diff.altered {
+        tracing::trace!("Processing altered DN {}", altered_dn);
+        let source_entry: Option<&LDAPEntry> = source_entries.get(&altered_dn);
+        let destination_entry: Option<&LDAPEntry> = destination_entries.get(&altered_dn);
+        if let Some(source_entry) = source_entry {
+            let mut ldap_mods: Vec<ldap3::Mod<String>> = vec![];
+            let mut ldap_bin_mods: Vec<ldap3::Mod<Vec<u8>>> = vec![];
+            for (attr_name, attr_value_changes) in &change.attrs.altered {
+                if ignore_attributes.contains(attr_name) {
+                    continue;
+                }
+                for attr_value_change in &attr_value_changes.0 {
+                    match attr_value_change {
+                        VecDiffType::Removed { .. }
+                        | VecDiffType::Inserted { .. }
+                        | VecDiffType::Altered { .. } => {
+                            let m = mod_value(
+                                attr_name,
+                                source_entry,
+                                source_ldap_schema,
+                                source_base_dn,
+                                destination_entry,
+                                destination_base_dn,
+                                ignore_object_classes,
+                            );
+                            if let Some(m) = m {
+                                if !ldap_mods.contains(&m) {
+                                    ldap_mods.push(m);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for attr_name in &change.attrs.removed {
+                if ignore_attributes.contains(attr_name) {
+                    continue;
+                }
+                let mut replacement_values =
+                    HashSet::from_iter(source_entry.attrs[attr_name].iter().cloned());
+                if attr_name == "objectClass" {
+                    for io in ignore_object_classes {
+                        replacement_values.remove(io);
+                    }
+                }
+                let attr_type_syntax = source_ldap_schema
+                    .find_attribute_type_property(attr_name, |at| at.syntax.as_ref());
+                tracing::trace!(
+                    "Attribute type syntax for deleted attribute {}: {:#?}",
+                    attr_name,
+                    attr_type_syntax
+                );
+                if let Some(syntax) = attr_type_syntax {
+                    if DN_SYNTAX_OID.eq(syntax) {
+                        tracing::trace!(
+                            "Replacing base DN {} with base DN {}",
+                            source_base_dn,
+                            destination_base_dn
+                        );
+                        replacement_values = replacement_values
+                            .into_iter()
+                            .map(|s| s.replace(&source_base_dn, destination_base_dn))
+                            .collect();
+                    }
+                }
+                ldap_mods.push(ldap3::Mod::Add(attr_name.to_string(), replacement_values));
+            }
+            for (attr_name, attr_value_changes) in &change.bin_attrs.altered {
+                if ignore_attributes.contains(attr_name) {
+                    continue;
+                }
+                for attr_value_change in &attr_value_changes.0 {
+                    match attr_value_change {
+                        VecDiffType::Removed { .. }
+                        | VecDiffType::Inserted { .. }
+                        | VecDiffType::Altered { .. } => {
+                            if let Some(values) = source_entry.bin_attrs.get(attr_name) {
+                                let replace_mod = ldap3::Mod::Replace(
+                                    attr_name.as_bytes().to_vec(),
+                                    HashSet::from_iter(values.iter().cloned()),
+                                );
+                                if !ldap_bin_mods.contains(&replace_mod) {
+                                    ldap_bin_mods.push(replace_mod)
+                                }
+                            } else {
+                                ldap_bin_mods.push(ldap3::Mod::Delete(
+                                    attr_name.as_bytes().to_vec(),
+                                    HashSet::new(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            for attr_name in &change.bin_attrs.removed {
+                if ignore_attributes.contains(attr_name) {
+                    continue;
+                }
+                ldap_bin_mods.push(ldap3::Mod::Add(
+                    attr_name.as_bytes().to_vec(),
+                    HashSet::from_iter(source_entry.bin_attrs[attr_name].iter().cloned()),
+                ));
+            }
+            if update && !(ldap_mods.is_empty() && ldap_bin_mods.is_empty()) {
+                ldap_operations.push(LDAPOperation::Modify {
+                    dn: source_entry.dn.clone(),
+                    mods: ldap_mods,
+                    bin_mods: ldap_bin_mods,
+                });
+            }
+        } else if delete {
+            ldap_operations.push(LDAPOperation::Delete {
+                dn: altered_dn.clone(),
+            });
+        }
+    }
+    for removed_dn in diff.removed {
+        if add {
+            let mut new_entry = source_entries[&removed_dn].clone();
+            for ia in ignore_attributes {
+                new_entry.attrs.remove(ia);
+                new_entry.bin_attrs.remove(ia);
+            }
+            if let Some((k, v)) = new_entry.attrs.remove_entry("objectClass") {
+                let ioc = &ignore_object_classes;
+                let new_v = v.into_iter().filter(|x| !ioc.contains(x)).collect();
+                new_entry.attrs.insert(k, new_v);
+            }
+            for (attr_name, attr_values) in new_entry.attrs.iter_mut() {
+                let attr_type_syntax = source_ldap_schema
+                    .find_attribute_type_property(attr_name, |at| at.syntax.as_ref());
+                tracing::trace!(
+                    "Attribute type syntax for attribute {} in deleted entry {}: {:#?}",
+                    attr_name,
+                    removed_dn,
+                    attr_type_syntax
+                );
+                if let Some(syntax) = attr_type_syntax {
+                    if DN_SYNTAX_OID.eq(syntax) {
+                        tracing::trace!(
+                            "Replacing base DN {} with base DN {}",
+                            source_base_dn,
+                            destination_base_dn
+                        );
+                        for s in attr_values.iter_mut() {
+                            *s = s.replace(&source_base_dn, destination_base_dn);
+                        }
+                    }
+                }
+            }
+            ldap_operations.push(LDAPOperation::Add(new_entry));
+        }
+    }
+
+    ldap_operations.sort_by(|a, b| {
+        a.operation_apply_cmp(b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    ldap_operations
 }
