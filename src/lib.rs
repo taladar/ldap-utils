@@ -27,7 +27,7 @@ use lazy_static::lazy_static;
 use diff::{Diff, VecDiffType};
 
 use chumsky::Parser;
-use ldap_types::basic::{LDAPEntry, LDAPOperation, OIDWithLength, RootDSE};
+use ldap_types::basic::{ChumskyError, LDAPEntry, LDAPOperation, OIDWithLength, RootDSE};
 use ldap_types::schema::{
     attribute_type_parser, ldap_syntax_parser, matching_rule_parser, matching_rule_use_parser,
     object_class_parser, AttributeType, LDAPSchema, LDAPSyntax, MatchingRule, MatchingRuleUse,
@@ -63,8 +63,6 @@ use derive_builder::Builder;
 use serde::Deserialize;
 
 use std::convert::TryInto;
-
-use ariadne::{Color, Fmt, Label, Report, ReportKind, Source};
 
 use thiserror::Error;
 
@@ -450,87 +448,6 @@ pub async fn query_root_dse(ldap: &mut Ldap) -> Result<Option<RootDSE>, LdapOper
     Ok(None)
 }
 
-/// a wrapped error in case parsing fails when retrieving the [LDAPSchema]
-/// from an ldap3 server.
-#[derive(Debug)]
-pub struct ChumskyError(Vec<chumsky::error::Simple<char>>);
-
-impl Display for ChumskyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Parse error: {:?}", self.0)
-    }
-}
-
-impl std::error::Error for ChumskyError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
-    }
-}
-
-/// print chumsky parse errors using ariadne
-#[instrument]
-pub fn print_errors(src: &str, errs: &[chumsky::error::Simple<char>]) {
-    errs.iter().for_each(|e| {
-        let msg = format!(
-            "{}{}, expected {}",
-            if e.found().is_some() {
-                "Unexpected token"
-            } else {
-                "Unexpected end of input"
-            },
-            if let Some(label) = e.label() {
-                format!(" while parsing {}", label)
-            } else {
-                String::new()
-            },
-            if e.expected().len() == 0 {
-                "end of input".to_string()
-            } else {
-                e.expected()
-                    .map(|expected| match expected {
-                        Some(expected) => expected.to_string(),
-                        None => "end of input".to_string(),
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            },
-        );
-
-        let report = Report::build(ReportKind::Error, (), e.span().start)
-            .with_code(3)
-            .with_message(msg)
-            .with_label(
-                Label::new(e.span())
-                    .with_message(format!(
-                        "Unexpected {}",
-                        e.found()
-                            .map(|c| format!("token {}", c.fg(Color::Red)))
-                            .unwrap_or_else(|| "end of input".to_string())
-                    ))
-                    .with_color(Color::Red),
-            );
-
-        let report = match e.reason() {
-            chumsky::error::SimpleReason::Unclosed { span, delimiter } => report.with_label(
-                Label::new(span.clone())
-                    .with_message(format!(
-                        "Unclosed delimiter {}",
-                        delimiter.fg(Color::Yellow)
-                    ))
-                    .with_color(Color::Yellow),
-            ),
-            chumsky::error::SimpleReason::Unexpected => report,
-            chumsky::error::SimpleReason::Custom(msg) => report.with_label(
-                Label::new(e.span())
-                    .with_message(format!("{}", msg.fg(Color::Yellow)))
-                    .with_color(Color::Yellow),
-            ),
-        };
-
-        report.finish().print(Source::from(&src)).unwrap();
-    });
-}
-
 /// error which can happen while retrieving and parsing the LDAP schema
 #[derive(Debug, Error)]
 pub enum LdapSchemaError {
@@ -571,10 +488,11 @@ pub async fn query_ldap_schema(ldap: &mut Ldap) -> Result<Option<LDAPSchema>, Ld
                 .iter()
                 .map(|x| match ldap_syntax_parser().parse_recovery(x.as_str()) {
                     (Some(ldap_syntax), _) => Ok(ldap_syntax),
-                    (_, errs) => {
-                        print_errors(x, &errs);
-                        Err(ChumskyError(errs))
-                    }
+                    (_, errs) => Err(ChumskyError {
+                        description: "ldap syntax".to_string(),
+                        source: x.to_string(),
+                        errors: errs,
+                    }),
                 })
                 .collect::<Result<Vec<LDAPSyntax>, ChumskyError>>()?;
             let matching_rules = entry
@@ -585,10 +503,11 @@ pub async fn query_ldap_schema(ldap: &mut Ldap) -> Result<Option<LDAPSchema>, Ld
                 .map(
                     |x| match matching_rule_parser().parse_recovery(x.as_str()) {
                         (Some(matching_rule), _) => Ok(matching_rule),
-                        (_, errs) => {
-                            print_errors(x, &errs);
-                            Err(ChumskyError(errs))
-                        }
+                        (_, errs) => Err(ChumskyError {
+                            description: "matching rule".to_string(),
+                            source: x.to_string(),
+                            errors: errs,
+                        }),
                     },
                 )
                 .collect::<Result<Vec<MatchingRule>, ChumskyError>>()?;
@@ -600,10 +519,11 @@ pub async fn query_ldap_schema(ldap: &mut Ldap) -> Result<Option<LDAPSchema>, Ld
                 .map(
                     |x| match matching_rule_use_parser().parse_recovery(x.as_str()) {
                         (Some(matching_rule_use), _) => Ok(matching_rule_use),
-                        (_, errs) => {
-                            print_errors(x, &errs);
-                            Err(ChumskyError(errs))
-                        }
+                        (_, errs) => Err(ChumskyError {
+                            description: "matching rule use".to_string(),
+                            source: x.to_string(),
+                            errors: errs,
+                        }),
                     },
                 )
                 .collect::<Result<Vec<MatchingRuleUse>, ChumskyError>>()?;
@@ -615,10 +535,11 @@ pub async fn query_ldap_schema(ldap: &mut Ldap) -> Result<Option<LDAPSchema>, Ld
                 .map(
                     |x| match attribute_type_parser().parse_recovery(x.as_str()) {
                         (Some(attribute_type), _) => Ok(attribute_type),
-                        (_, errs) => {
-                            print_errors(x, &errs);
-                            Err(ChumskyError(errs))
-                        }
+                        (_, errs) => Err(ChumskyError {
+                            description: "attribute type".to_string(),
+                            source: x.to_string(),
+                            errors: errs,
+                        }),
                     },
                 )
                 .collect::<Result<Vec<AttributeType>, ChumskyError>>()?;
@@ -629,10 +550,11 @@ pub async fn query_ldap_schema(ldap: &mut Ldap) -> Result<Option<LDAPSchema>, Ld
                 .iter()
                 .map(|x| match object_class_parser().parse_recovery(x.as_str()) {
                     (Some(object_class), _) => Ok(object_class),
-                    (_, errs) => {
-                        print_errors(x, &errs);
-                        Err(ChumskyError(errs))
-                    }
+                    (_, errs) => Err(ChumskyError {
+                        description: "object class".to_string(),
+                        source: x.to_string(),
+                        errors: errs,
+                    }),
                 })
                 .collect::<Result<Vec<ObjectClass>, ChumskyError>>()?;
             return Ok(Some(LDAPSchema {
