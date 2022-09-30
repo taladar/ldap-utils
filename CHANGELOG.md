@@ -1,3 +1,7 @@
+## 0.2.2
+
+add Clone to ConnectParameters
+
 ## 0.2.1
 
 move error handling for chumsky errors into ldap-types and into ChumskyError type,

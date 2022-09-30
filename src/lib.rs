@@ -104,7 +104,7 @@ pub fn parse_scope(src: &str) -> Result<ldap3::Scope, ScopeParserError> {
 
 /// a set of parameters for connecting to an LDAP server, including client-side
 /// certificate auth support
-#[derive(Debug, Builder, Deserialize)]
+#[derive(Debug, Clone, Builder, Deserialize)]
 pub struct ConnectParameters {
     /// CA certificate path
     ca_cert_path: std::string::String,
