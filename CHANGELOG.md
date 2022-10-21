@@ -1,3 +1,8 @@
+## 0.2.3
+
+fix SPDX license expression
+update dependencies
+
 ## 0.2.2
 
 add Clone to ConnectParameters
