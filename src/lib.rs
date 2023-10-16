@@ -35,7 +35,6 @@ use ldap_types::schema::{
 };
 
 use ldap3::exop::{WhoAmI, WhoAmIResp};
-use ldap3::result::SearchResult;
 use ldap3::{Ldap, LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 use native_tls::{Certificate, Identity, TlsConnector};
 use oid::ObjectIdentifier;
@@ -336,34 +335,68 @@ pub enum LdapOperationError {
 
 /// perform an LDAP search via ldap3, logging a proper error message if it fails
 /// and returning an iterator to already unwrapped search entries
-pub async fn ldap_search<'a, S: AsRef<str> + Clone + Display + Debug + Send + Sync>(
+pub async fn ldap_search<'a, S>(
     ldap: &mut Ldap,
     base: &str,
     scope: Scope,
     filter: &str,
     attrs: Vec<S>,
-) -> Result<Box<dyn Iterator<Item = SearchEntry> + 'a>, LdapOperationError> {
-    let search_result = ldap.search(base, scope, filter, attrs.clone()).await?;
-    let SearchResult(_rs, res) = &search_result;
-    if res.rc != 0 {
-        tracing::debug!(
-            "Non-zero return code {} in LDAP query\n  base: {}\n  scope: {:?}\n  filter: {}\n  attrs: {:#?}",
-            res.rc,
-            base,
-            scope,
-            filter,
-            attrs
-        );
-        tracing::debug!(
-            "ldapsearch -Q -LLL -o ldif-wrap=no -b '{}' -s {} '{}' {}",
-            base,
-            format!("{:?}", scope).to_lowercase(),
-            filter,
-            itertools::join(attrs.iter(), " ")
-        );
+) -> Result<Box<dyn Iterator<Item = SearchEntry> + 'a>, LdapOperationError>
+where
+    S: AsRef<str> + Clone + Display + Debug + Send + Sync,
+    Vec<S>: AsRef<[S]> + Send + Sync + 'a,
+{
+    let adapter: ldap3::adapters::PagedResults<S, Vec<S>> = ldap3::adapters::PagedResults::new(100);
+    let mut search_stream = ldap
+        .streaming_search_with(adapter, base, scope, filter, attrs.clone())
+        .await?;
+    let mut rs = Vec::new();
+    loop {
+        match search_stream.next().await {
+            Ok(None) => {
+                let res = search_stream.finish().await;
+                if res.rc != 0 {
+                    tracing::debug!(
+                        "Non-zero return code {} in LDAP query\n  base: {}\n  scope: {:?}\n  filter: {}\n  attrs: {:#?}",
+                        res.rc,
+                        base,
+                        scope,
+                        filter,
+                        attrs
+                    );
+                    tracing::debug!(
+                        "ldapsearch -Q -LLL -E pr=100/noprompt -o ldif-wrap=no -b '{}' -s {} '{}' {}",
+                        base,
+                        format!("{:?}", scope).to_lowercase(),
+                        filter,
+                        itertools::join(attrs.iter(), " ")
+                    );
+                }
+                break Ok(Box::new(rs.into_iter().map(SearchEntry::construct)));
+            }
+            Ok(Some(value)) => {
+                rs.push(value);
+            }
+            Err(err) => {
+                tracing::debug!(
+                    "Error {} in LDAP query after {} results\n  base: {}\n  scope: {:?}\n  filter: {}\n  attrs: {:#?}",
+                    err,
+                    rs.len(),
+                    base,
+                    scope,
+                    filter,
+                    attrs
+                );
+                tracing::debug!(
+                    "ldapsearch -Q -LLL -E pr=100/noprompt -o ldif-wrap=no -b '{}' -s {} '{}' {}",
+                    base,
+                    format!("{:?}", scope).to_lowercase(),
+                    filter,
+                    itertools::join(attrs.iter(), " ")
+                );
+            }
+        }
     }
-    let (rs, _res) = search_result.success()?;
-    Ok(Box::new(rs.into_iter().map(SearchEntry::construct)))
 }
 
 /// an error type in case parsing an OID fails when querying the RootDSE from ldap3

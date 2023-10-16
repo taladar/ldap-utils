@@ -1,0 +1,333 @@
+<?xml version="1.0" encoding="utf-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.3" serialNumber="urn:uuid:289ef9a7-5f14-448b-92d1-d6f4bd7dc3a5" version="1">
+  <metadata>
+    <timestamp>2022-10-21T09:41:19.118174294Z</timestamp>
+    <tools>
+      <tool>
+        <vendor>CycloneDX</vendor>
+        <name>cargo-cyclonedx</name>
+        <version>0.3.7</version>
+      </tool>
+    </tools>
+    <authors>
+      <author>
+        <name>Matthias Hörmann</name>
+        <email>mhoermann@gmail.com</email>
+      </author>
+    </authors>
+    <component type="library" bom-ref="pkg:cargo/ldap-utils@0.2.3">
+      <name>ldap-utils</name>
+      <version>0.2.3</version>
+      <description>Implements some LDAP utility functionality around OpenLDAP config files and the ldap3 Rust library</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/ldap-utils@0.2.3</purl>
+      <externalReferences>
+        <reference type="vcs">
+          <url>https://github.com/taladar/ldap-utils</url>
+        </reference>
+      </externalReferences>
+    </component>
+  </metadata>
+  <components>
+    <component type="library" bom-ref="pkg:cargo/chumsky@0.7.0">
+      <name>chumsky</name>
+      <version>0.7.0</version>
+      <description>A parser library for humans with powerful error recovery</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT</expression>
+      </licenses>
+      <purl>pkg:cargo/chumsky@0.7.0</purl>
+      <externalReferences>
+        <reference type="vcs">
+          <url>https://github.com/zesterer/chumsky</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/derive_builder@0.10.2">
+      <name>derive_builder</name>
+      <version>0.10.2</version>
+      <description>Rust macro to automatically implement the builder pattern for arbitrary structs.</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/derive_builder@0.10.2</purl>
+      <externalReferences>
+        <reference type="documentation">
+          <url>https://docs.rs/derive_builder/0.10.2</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/colin-kiegel/rust-derive-builder</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/diff-struct@0.4.2">
+      <name>diff-struct</name>
+      <version>0.4.2</version>
+      <description>A trait for diffing and apply diffs to structs of a certain type</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT</expression>
+      </licenses>
+      <purl>pkg:cargo/diff-struct@0.4.2</purl>
+      <externalReferences>
+        <reference type="vcs">
+          <url>https://github.com/BenHall-7/diff-struct</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/dirs@2.0.2">
+      <name>dirs</name>
+      <version>2.0.2</version>
+      <description>A tiny low-level library that provides platform-specific standard locations of directories for config, cache and other data on Linux, Windows, macOS and Redox by leveraging the mechanisms defined by the XDG base/user directory specifications on Linux, the Known Folder API on Windows, and the Standard Directory guidelines on macOS.</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/dirs@2.0.2</purl>
+      <externalReferences>
+        <reference type="vcs">
+          <url>https://github.com/soc/dirs-rs</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/itertools@0.10.5">
+      <name>itertools</name>
+      <version>0.10.5</version>
+      <description>Extra iterator adaptors, iterator methods, free functions, and macros.</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/itertools@0.10.5</purl>
+      <externalReferences>
+        <reference type="documentation">
+          <url>https://docs.rs/itertools/</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/rust-itertools/itertools</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/lazy_static@1.4.0">
+      <name>lazy_static</name>
+      <version>1.4.0</version>
+      <description>A macro for declaring lazily evaluated statics in Rust.</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/lazy_static@1.4.0</purl>
+      <externalReferences>
+        <reference type="documentation">
+          <url>https://docs.rs/lazy_static</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/rust-lang-nursery/lazy-static.rs</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/ldap-types@0.2.3">
+      <name>ldap-types</name>
+      <version>0.2.3</version>
+      <description>Implements the basic LDAP types so they can be used in other crates</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/ldap-types@0.2.3</purl>
+      <externalReferences>
+        <reference type="vcs">
+          <url>https://github.com/taladar/ldap-types</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/ldap3@0.10.5">
+      <name>ldap3</name>
+      <version>0.10.5</version>
+      <description>Pure-Rust LDAP Client</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/ldap3@0.10.5</purl>
+      <externalReferences>
+        <reference type="documentation">
+          <url>https://docs.rs/ldap3</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/inejge/ldap3</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/native-tls@0.2.10">
+      <name>native-tls</name>
+      <version>0.2.10</version>
+      <description>A wrapper over a platform's native TLS implementation</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/native-tls@0.2.10</purl>
+      <externalReferences>
+        <reference type="vcs">
+          <url>https://github.com/sfackler/rust-native-tls</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/oid@0.2.1">
+      <name>oid</name>
+      <version>0.2.1</version>
+      <description>Rust-native library for building, parsing, and formating Object Identifiers (OIDs)</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/oid@0.2.1</purl>
+      <externalReferences>
+        <reference type="website">
+          <url>https://labs.unnecessary.engineering/oid</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/UnnecessaryEngineering/oid</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/openssl@0.10.42">
+      <name>openssl</name>
+      <version>0.10.42</version>
+      <description>OpenSSL bindings</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/openssl@0.10.42</purl>
+      <externalReferences>
+        <reference type="vcs">
+          <url>https://github.com/sfackler/rust-openssl</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/regex@1.6.0">
+      <name>regex</name>
+      <version>1.6.0</version>
+      <description>An implementation of regular expressions for Rust. This implementation uses finite automata and guarantees linear time matching on all inputs. </description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/regex@1.6.0</purl>
+      <externalReferences>
+        <reference type="documentation">
+          <url>https://docs.rs/regex</url>
+        </reference>
+        <reference type="website">
+          <url>https://github.com/rust-lang/regex</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/rust-lang/regex</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/serde@1.0.146">
+      <name>serde</name>
+      <version>1.0.146</version>
+      <description>A generic serialization/deserialization framework</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/serde@1.0.146</purl>
+      <externalReferences>
+        <reference type="documentation">
+          <url>https://docs.serde.rs/serde/</url>
+        </reference>
+        <reference type="website">
+          <url>https://serde.rs</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/serde-rs/serde</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/thiserror@1.0.37">
+      <name>thiserror</name>
+      <version>1.0.37</version>
+      <description>derive(Error)</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/thiserror@1.0.37</purl>
+      <externalReferences>
+        <reference type="documentation">
+          <url>https://docs.rs/thiserror</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/dtolnay/thiserror</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/tokio@1.21.2">
+      <name>tokio</name>
+      <version>1.21.2</version>
+      <description>An event-driven, non-blocking I/O platform for writing asynchronous I/O backed applications. </description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT</expression>
+      </licenses>
+      <purl>pkg:cargo/tokio@1.21.2</purl>
+      <externalReferences>
+        <reference type="website">
+          <url>https://tokio.rs</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/tokio-rs/tokio</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/toml@0.5.9">
+      <name>toml</name>
+      <version>0.5.9</version>
+      <description>A native Rust encoder and decoder of TOML-formatted files and streams. Provides implementations of the standard Serialize/Deserialize traits for TOML data to facilitate deserializing and serializing Rust structures. </description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT OR Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/toml@0.5.9</purl>
+      <externalReferences>
+        <reference type="documentation">
+          <url>https://docs.rs/toml</url>
+        </reference>
+        <reference type="website">
+          <url>https://github.com/alexcrichton/toml-rs</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/alexcrichton/toml-rs</url>
+        </reference>
+      </externalReferences>
+    </component>
+    <component type="library" bom-ref="pkg:cargo/tracing@0.1.37">
+      <name>tracing</name>
+      <version>0.1.37</version>
+      <description>Application-level tracing for Rust. </description>
+      <scope>required</scope>
+      <licenses>
+        <expression>MIT</expression>
+      </licenses>
+      <purl>pkg:cargo/tracing@0.1.37</purl>
+      <externalReferences>
+        <reference type="website">
+          <url>https://tokio.rs</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/tokio-rs/tracing</url>
+        </reference>
+      </externalReferences>
+    </component>
+  </components>
+</bom>
