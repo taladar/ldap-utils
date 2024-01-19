@@ -1,3 +1,8 @@
+## 0.3.0
+
+update dependencies including some incompatible ones
+replace dirs with dirs2
+
 ## 0.2.3
 
 fix SPDX license expression

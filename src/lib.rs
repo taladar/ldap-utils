@@ -2,7 +2,8 @@
 #![deny(renamed_and_removed_lints)]
 #![forbid(unsafe_code)]
 #![deny(deprecated)]
-#![forbid(private_in_public)]
+#![forbid(private_interfaces)]
+#![forbid(private_bounds)]
 #![forbid(non_fmt_panics)]
 #![deny(unreachable_code)]
 #![deny(unreachable_patterns)]
@@ -54,7 +55,7 @@ use std::path::Path;
 
 use regex::Regex;
 
-use dirs::home_dir;
+use dirs2::home_dir;
 
 use tracing::instrument;
 
@@ -298,7 +299,11 @@ pub async fn connect_with_parameters(
     }
     let client_key = PKey::private_key_from_pem(&client_key_contents)?;
     let p12_password = "client";
-    let p12 = Pkcs12::builder().build(p12_password, "client", &client_key, &client_cert)?;
+    let p12 = Pkcs12::builder()
+        .name("client")
+        .pkey(&client_key)
+        .cert(&client_cert)
+        .build2(p12_password)?;
     let p12_contents = p12.to_der()?;
     let mut ca_cert_contents = Vec::new();
     {
@@ -953,7 +958,7 @@ pub fn diff_entries(
                         );
                         replacement_values = replacement_values
                             .into_iter()
-                            .map(|s| s.replace(&source_base_dn, destination_base_dn))
+                            .map(|s| s.replace(source_base_dn, destination_base_dn))
                             .collect();
                     }
                 }
@@ -1037,7 +1042,7 @@ pub fn diff_entries(
                             destination_base_dn
                         );
                         for s in attr_values.iter_mut() {
-                            *s = s.replace(&source_base_dn, destination_base_dn);
+                            *s = s.replace(source_base_dn, destination_base_dn);
                         }
                     }
                 }
