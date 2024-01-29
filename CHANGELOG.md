@@ -1,3 +1,7 @@
+## 0.3.1
+
+upgrade dependencies
+
 ## 0.3.0
 
 update dependencies including some incompatible ones
