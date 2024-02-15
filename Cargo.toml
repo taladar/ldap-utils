@@ -3,7 +3,7 @@ name = "ldap-utils"
 description = "Implements some LDAP utility functionality around OpenLDAP config files and the ldap3 Rust library"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["Matthias Hörmann <mhoermann@gmail.com>"]
 edition = "2021"
 repository = "https://github.com/taladar/ldap-utils"
@@ -20,7 +20,7 @@ debug = true
 [dependencies]
 
 [dependencies.toml]
-version = "0.8.8"
+version = "0.8.10"
 
 [dependencies.tracing]
 version = "0.1.40"
@@ -51,7 +51,7 @@ version = "3.0.1"
 version = "0.2"
 
 [dependencies.derive_builder]
-version = "0.13.0"
+version = "0.20.0"
 
 [dependencies.regex]
 version="1.10.3"
@@ -61,17 +61,17 @@ version = "1.0.196"
 features = [ "derive" ]
 
 [dependencies.itertools]
-version = "0.12.0"
+version = "0.12.1"
 
 [dependencies.tokio]
-version = "1.35.1"
+version = "1.36.0"
 features = [ "full" ]
 
 [dependencies.oid]
 version = "0.2.1"
 
 [dependencies.thiserror]
-version = "1.0.56"
+version = "1.0.57"
 
 #[patch.crates-io]
 #ldap-types = { path = "../ldap-types" }
