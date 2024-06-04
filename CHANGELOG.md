@@ -1,3 +1,7 @@
+## 0.4.1
+
+upgrade dependencies including some incompatible ones
+
 ## 0.4.0
 
 upgrade dependencies including some incompatible ones
