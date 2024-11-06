@@ -3,7 +3,7 @@ name = "ldap-utils"
 description = "Implements some LDAP utility functionality around OpenLDAP config files and the ldap3 Rust library"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
-version = "0.4.4"
+version = "0.4.5"
 authors = ["Matthias Hörmann <mhoermann@gmail.com>"]
 edition = "2021"
 repository = "https://github.com/taladar/ldap-utils"
@@ -37,7 +37,7 @@ version = "0.13.0"
 version = "1.5.0"
 
 [dependencies.ldap-types]
-version = "0.4.4"
+version = "0.4.5"
 
 [dependencies.ldap3]
 version = "0.11.5"
@@ -60,7 +60,7 @@ version = "1.0.214"
 features = ["derive"]
 
 [dependencies.thiserror]
-version = "1.0.65"
+version = "2.0.0"
 
 [dependencies.tokio]
 version = "1.41.0"
