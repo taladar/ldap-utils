@@ -143,22 +143,22 @@ pub fn openldap_connect_parameters(
             tracing::debug!("Using .ldaprc at {:?}", ldap_rc_filename);
             ldap_rc_content = std::fs::read_to_string(ldap_rc_filename)?;
 
+            let ca_cert_re = Regex::new(r"^TLS_CACERT *(.*)$")?;
+            let client_cert_re = Regex::new(r"^TLS_CERT *(.*)$")?;
+            let client_key_re = Regex::new(r"^TLS_KEY *(.*)$")?;
             for line in ldap_rc_content.lines() {
-                let ca_cert_re = Regex::new(r"^TLS_CACERT *(.*)$")?;
                 if let Some(caps) = ca_cert_re.captures(line) {
                     let ca_cert_path = caps.get(1).unwrap().as_str();
                     tracing::debug!("Extracted .ldaprc TLS_CACERT value {}", ca_cert_path);
                     builder.ca_cert_path(ca_cert_path.to_string());
                 }
 
-                let client_cert_re = Regex::new(r"^TLS_CERT *(.*)$")?;
                 if let Some(caps) = client_cert_re.captures(line) {
                     let client_cert_path = caps.get(1).unwrap().as_str();
                     tracing::debug!("Extracted .ldaprc TLS_CERT value {}", client_cert_path);
                     builder.client_cert_path(client_cert_path.to_string());
                 }
 
-                let client_key_re = Regex::new(r"^TLS_KEY *(.*)$")?;
                 if let Some(caps) = client_key_re.captures(line) {
                     let client_key_path = caps.get(1).unwrap().as_str();
                     tracing::debug!("Extracted .ldaprc TLS_KEY value {}", client_key_path);
@@ -175,8 +175,8 @@ pub fn openldap_connect_parameters(
             tracing::debug!("Using ldap.conf at {:?}", ldap_conf_filename);
             ldap_conf_content = std::fs::read_to_string(ldap_conf_filename)?;
 
+            let uri_re = Regex::new(r"^URI *(.*)$")?;
             for line in ldap_conf_content.lines() {
-                let uri_re = Regex::new(r"^URI *(.*)$")?;
                 if let Some(caps) = uri_re.captures(line) {
                     let url = caps.get(1).unwrap().as_str();
                     tracing::debug!("Extracted ldap.conf URI value {}", url);
