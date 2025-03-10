@@ -1,3 +1,7 @@
+## 0.5.1
+
+update dependencies
+
 ## 0.5.0
 
 update dependencies, version mainly set to 0.5.0 due to ldap-types changes to feature compilation
