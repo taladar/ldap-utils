@@ -3,17 +3,13 @@ name = "ldap-utils"
 description = "Implements some LDAP utility functionality around OpenLDAP config files and the ldap3 Rust library"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
-version = "0.5.2"
+version = "0.5.3"
 authors = ["Matthias Hörmann <mhoermann@gmail.com>"]
 edition = "2021"
 repository = "https://github.com/taladar/ldap-utils"
 keywords = ["ldap", "schema", "ldap3"]
 categories = ["parsing"]
 exclude = [".env", "tarpaulin-report.html", "tarpaulin-report.json"]
-
-[profile.release]
-# do not strip debug info from release builds, useful for debugging those, cargo-flamegraph profiling or similar use cases
-debug = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -37,10 +33,10 @@ version = "0.14.0"
 version = "1.5.0"
 
 [dependencies.ldap-types]
-version = "0.6.1"
+version = "0.6.2"
 
 [dependencies.ldap3]
-version = "0.11.5"
+version = "0.12.1"
 features = ["tls"]
 
 [dependencies.native-tls]
@@ -53,24 +49,28 @@ version = "0.2.1"
 version = "0.10"
 
 [dependencies.regex]
-version = "1.11.1"
+version = "1.11.2"
 
 [dependencies.serde]
-version = "1.0.219"
+version = "1.0.225"
 features = ["derive"]
 
 [dependencies.thiserror]
-version = "2.0.12"
+version = "2.0.16"
 
 [dependencies.tokio]
-version = "1.44.2"
+version = "1.47.1"
 features = ["full"]
 
 [dependencies.toml]
-version = "0.8.20"
+version = "0.9.7"
 
 [dependencies.tracing]
 version = "0.1.41"
+
+[profile.release]
+# do not strip debug info from release builds, useful for debugging those, cargo-flamegraph profiling or similar use cases
+debug = true
 
 #[patch.crates-io]
 #ldap-types = { path = "../ldap-types" }

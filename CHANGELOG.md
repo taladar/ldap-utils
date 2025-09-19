@@ -1,3 +1,9 @@
+# Changelog
+
+## 0.5.3
+
+update dependencies
+
 ## 0.5.2
 
 update dependencies
@@ -8,7 +14,8 @@ update dependencies
 
 ## 0.5.0
 
-update dependencies, version mainly set to 0.5.0 due to ldap-types changes to feature compilation
+update dependencies, version mainly set to 0.5.0 due to ldap-types changes to
+feature compilation
 
 ## 0.4.7
 
@@ -17,8 +24,6 @@ update dependencies
 ## 0.4.6
 
 update dependencies
-
-## 0.4.4
 
 ## 0.4.5
 
@@ -70,16 +75,18 @@ add Clone to ConnectParameters
 
 ## 0.2.1
 
-move error handling for chumsky errors into ldap-types and into ChumskyError type,
-adjust code to use those
+move error handling for chumsky errors into ldap-types and into ChumskyError
+type, adjust code to use those
 
 ## 0.2.0
 
-update ldap3 0.9 to 0.10.5 or above (earlier 0.10 have a bug with SASL external auth)
+update ldap3 0.9 to 0.10.5 or above (earlier 0.10 have a bug with SASL external
+auth)
 
 ## 0.1.1
 
-Diff logic to find differences between two sets of LDAPEntry and to apply the changes to another LDAP server
+Diff logic to find differences between two sets of LDAPEntry and to apply the
+changes to another LDAP server
 
 ## 0.1.0
 
