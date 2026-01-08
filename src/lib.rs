@@ -1,33 +1,8 @@
-#![deny(unknown_lints)]
-#![deny(renamed_and_removed_lints)]
-#![forbid(unsafe_code)]
-#![deny(deprecated)]
-#![forbid(private_interfaces)]
-#![forbid(private_bounds)]
-#![forbid(non_fmt_panics)]
-#![deny(unreachable_code)]
-#![deny(unreachable_patterns)]
-#![forbid(unused_doc_comments)]
-#![forbid(unused_must_use)]
-#![deny(while_true)]
-#![deny(unused_parens)]
-#![deny(redundant_semicolons)]
-#![deny(non_ascii_idents)]
-#![deny(confusable_idents)]
-#![warn(missing_docs)]
-#![warn(clippy::missing_docs_in_private_items)]
-#![warn(clippy::cargo_common_metadata)]
-#![warn(rustdoc::missing_crate_level_docs)]
-#![deny(rustdoc::broken_intra_doc_links)]
-#![warn(missing_debug_implementations)]
-#![deny(clippy::mod_module_files)]
 #![doc = include_str!("../README.md")]
-
-use lazy_static::lazy_static;
 
 use diff::{Diff, VecDiffType};
 
-use chumsky::Parser;
+use chumsky::Parser as _;
 use ldap_types::basic::{ChumskyError, LDAPEntry, LDAPOperation, OIDWithLength, RootDSE};
 use ldap_types::schema::{
     attribute_type_parser, ldap_syntax_parser, matching_rule_parser, matching_rule_use_parser,
@@ -41,6 +16,17 @@ use ldap3::{Ldap, LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 use native_tls::{Certificate, Identity, TlsConnector};
 use oid::ObjectIdentifier;
 
+use std::sync::LazyLock;
+
+/// Object Identifier for the DN syntax, as defined in RFC 4517.
+pub static DN_SYNTAX_OID: LazyLock<Result<OIDWithLength, oid::ObjectIdentifierError>> =
+    LazyLock::new(|| {
+        Ok(OIDWithLength {
+            oid: ObjectIdentifier::try_from("1.3.6.1.4.1.1466.115.121.1.12")?,
+            length: None,
+        })
+    });
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -50,7 +36,7 @@ use openssl::pkey::PKey;
 use openssl::x509::X509;
 
 use std::fs::File;
-use std::io::Read;
+use std::io::Read as _;
 use std::path::Path;
 
 use regex::Regex;
@@ -63,8 +49,6 @@ use derive_builder::Builder;
 
 use serde::Deserialize;
 
-use std::convert::TryInto;
-
 use thiserror::Error;
 
 /// creates a noop_control object for use with ldap3
@@ -76,6 +60,7 @@ use thiserror::Error;
 /// OpenLDAP's implementation seems to be buggy, in my tests some uses of the
 /// NOOP control lead to problems displaying affected objects until the LDAP
 /// server was restarted
+#[must_use]
 pub fn noop_control() -> ldap3::controls::RawControl {
     ldap3::controls::RawControl {
         ctype: "1.3.6.1.4.1.4203.666.5.2".to_string(),
@@ -94,6 +79,10 @@ pub enum ScopeParserError {
 
 /// parse an [ldap3::Scope] from the string one would specify to use the same
 /// scope with OpenLDAP's ldapsearch -s parameter
+///
+/// # Errors
+///
+/// fails if the scope is not one of the expected values
 pub fn parse_scope(src: &str) -> Result<ldap3::Scope, ScopeParserError> {
     match src {
         "base" => Ok(ldap3::Scope::Base),
@@ -130,6 +119,10 @@ pub enum OpenLdapConnectParameterError {
 
 /// try to detect OpenLDAP connect parameters from its config files
 /// (ldap.conf in /etc/ldap or /etc/openldap and .ldaprc in the user home dir)
+///
+/// # Errors
+///
+/// fails if reading or parsing OpenLDAP config fails
 #[instrument(skip(builder))]
 pub fn openldap_connect_parameters(
     builder: &mut ConnectParametersBuilder,
@@ -137,8 +130,7 @@ pub fn openldap_connect_parameters(
     let ldap_rc_content;
     let ldap_conf_content;
     if let Some(d) = home_dir() {
-        let mut ldap_rc_filename = d;
-        ldap_rc_filename.push(".ldaprc");
+        let ldap_rc_filename = d.join(".ldaprc");
         if ldap_rc_filename.exists() {
             tracing::debug!("Using .ldaprc at {:?}", ldap_rc_filename);
             ldap_rc_content = std::fs::read_to_string(ldap_rc_filename)?;
@@ -147,20 +139,29 @@ pub fn openldap_connect_parameters(
             let client_cert_re = Regex::new(r"^TLS_CERT *(.*)$")?;
             let client_key_re = Regex::new(r"^TLS_KEY *(.*)$")?;
             for line in ldap_rc_content.lines() {
-                if let Some(caps) = ca_cert_re.captures(line) {
-                    let ca_cert_path = caps.get(1).unwrap().as_str();
+                if let Some(ca_cert_path) = ca_cert_re
+                    .captures(line)
+                    .and_then(|caps| caps.get(1))
+                    .map(|m| m.as_str())
+                {
                     tracing::debug!("Extracted .ldaprc TLS_CACERT value {}", ca_cert_path);
                     builder.ca_cert_path(ca_cert_path.to_string());
                 }
 
-                if let Some(caps) = client_cert_re.captures(line) {
-                    let client_cert_path = caps.get(1).unwrap().as_str();
+                if let Some(client_cert_path) = client_cert_re
+                    .captures(line)
+                    .and_then(|caps| caps.get(1))
+                    .map(|m| m.as_str())
+                {
                     tracing::debug!("Extracted .ldaprc TLS_CERT value {}", client_cert_path);
                     builder.client_cert_path(client_cert_path.to_string());
                 }
 
-                if let Some(caps) = client_key_re.captures(line) {
-                    let client_key_path = caps.get(1).unwrap().as_str();
+                if let Some(client_key_path) = client_key_re
+                    .captures(line)
+                    .and_then(|caps| caps.get(1))
+                    .map(|m| m.as_str())
+                {
                     tracing::debug!("Extracted .ldaprc TLS_KEY value {}", client_key_path);
                     builder.client_key_path(client_key_path.to_string());
                 }
@@ -177,8 +178,11 @@ pub fn openldap_connect_parameters(
 
             let uri_re = Regex::new(r"^URI *(.*)$")?;
             for line in ldap_conf_content.lines() {
-                if let Some(caps) = uri_re.captures(line) {
-                    let url = caps.get(1).unwrap().as_str();
+                if let Some(url) = uri_re
+                    .captures(line)
+                    .and_then(|caps| caps.get(1))
+                    .map(|m| m.as_str())
+                {
                     tracing::debug!("Extracted ldap.conf URI value {}", url);
                     builder.url(url.to_string());
                 }
@@ -219,6 +223,10 @@ pub enum TomlConfigError {
 }
 
 /// load ldap connect parameters from a toml file
+///
+/// # Errors
+///
+/// fails if reading or parsing the toml config fails
 #[instrument]
 pub fn toml_connect_parameters(
     filename: std::path::PathBuf,
@@ -258,6 +266,11 @@ pub enum ConnectError {
 
 /// try to connect to an LDAP server using ldap3 using the OpenLDAP config files
 /// supplemented by hardcoded default values
+///
+/// # Errors
+///
+/// fails if OpenLDAP config could not be read or parsed or if the connection
+/// attempt with those parameters fails
 #[instrument]
 pub async fn connect() -> Result<(Ldap, std::string::String), ConnectError> {
     let mut builder = ConnectParametersBuilder::default();
@@ -282,6 +295,11 @@ pub async fn connect() -> Result<(Ldap, std::string::String), ConnectError> {
 }
 
 /// connect to an LDAP server using ldap3 with the given set of default parameters
+///
+/// # Errors
+///
+/// fails if reading or parsing of client certificates fails or if the
+/// actual connection attempt fails
 #[instrument]
 pub async fn connect_with_parameters(
     connect_parameters: ConnectParameters,
@@ -337,10 +355,17 @@ pub enum LdapOperationError {
     /// and error parsing an OID
     #[error("OID error: {0}")]
     OIDError(#[from] OIDError),
+    /// An expected attribute was missing from the LDAP entry.
+    #[error("Missing expected attribute: {0}")]
+    MissingAttribute(String),
 }
 
 /// perform an LDAP search via ldap3, logging a proper error message if it fails
 /// and returning an iterator to already unwrapped search entries
+///
+/// # Errors
+///
+/// fails if the underlying ldap search operation fails or returns a non-success code
 pub async fn ldap_search<'a, S: AsRef<str> + Clone + Display + Debug + Send + Sync>(
     ldap: &mut Ldap,
     base: &str,
@@ -362,7 +387,7 @@ pub async fn ldap_search<'a, S: AsRef<str> + Clone + Display + Debug + Send + Sy
         tracing::debug!(
             "ldapsearch -Q -LLL -o ldif-wrap=no -b '{}' -s {} '{}' {}",
             base,
-            format!("{:?}", scope).to_lowercase(),
+            format!("{scope:?}").to_lowercase(),
             filter,
             itertools::join(attrs.iter(), " ")
         );
@@ -389,6 +414,11 @@ impl std::error::Error for OIDError {
 }
 
 /// retrieve the [RootDSE] from an LDAP server using ldap3
+///
+/// # Errors
+///
+/// Returns `LdapOperationError` if the LDAP search fails, or if a required attribute
+/// is missing from the RootDSE entry, or if an OID cannot be parsed.
 #[instrument(skip(ldap))]
 pub async fn query_root_dse(ldap: &mut Ldap) -> Result<Option<RootDSE>, LdapOperationError> {
     let mut it = ldap_search(
@@ -412,21 +442,64 @@ pub async fn query_root_dse(ldap: &mut Ldap) -> Result<Option<RootDSE>, LdapOper
         let supported_ldap_version = entry
             .attrs
             .get("supportedLDAPVersion")
-            .unwrap()
+            .ok_or(LdapOperationError::MissingAttribute(
+                "supportedLDAPVersion".to_string(),
+            ))?
             .first()
-            .unwrap();
-        let supported_controls = entry.attrs.get("supportedControl").unwrap();
-        let supported_extensions = entry.attrs.get("supportedExtension").unwrap();
-        let supported_features = entry.attrs.get("supportedFeatures").unwrap();
-        let supported_sasl_mechanisms = entry.attrs.get("supportedSASLMechanisms").unwrap();
-        let config_context = entry.attrs.get("configContext").unwrap().first().unwrap();
-        let naming_contexts = entry.attrs.get("namingContexts").unwrap();
+            .ok_or(LdapOperationError::MissingAttribute(
+                "supportedLDAPVersion".to_string(),
+            ))?;
+        let supported_controls =
+            entry
+                .attrs
+                .get("supportedControl")
+                .ok_or(LdapOperationError::MissingAttribute(
+                    "supportedControl".to_string(),
+                ))?;
+        let supported_extensions =
+            entry
+                .attrs
+                .get("supportedExtension")
+                .ok_or(LdapOperationError::MissingAttribute(
+                    "supportedExtension".to_string(),
+                ))?;
+        let supported_features =
+            entry
+                .attrs
+                .get("supportedFeatures")
+                .ok_or(LdapOperationError::MissingAttribute(
+                    "supportedFeatures".to_string(),
+                ))?;
+        let supported_sasl_mechanisms = entry.attrs.get("supportedSASLMechanisms").ok_or(
+            LdapOperationError::MissingAttribute("supportedSASLMechanisms".to_string()),
+        )?;
+        let config_context = entry
+            .attrs
+            .get("configContext")
+            .ok_or(LdapOperationError::MissingAttribute(
+                "configContext".to_string(),
+            ))?
+            .first()
+            .ok_or(LdapOperationError::MissingAttribute(
+                "configContext".to_string(),
+            ))?;
+        let naming_contexts =
+            entry
+                .attrs
+                .get("namingContexts")
+                .ok_or(LdapOperationError::MissingAttribute(
+                    "namingContexts".to_string(),
+                ))?;
         let subschema_subentry = entry
             .attrs
             .get("subschemaSubentry")
-            .unwrap()
+            .ok_or(LdapOperationError::MissingAttribute(
+                "subschemaSubentry".to_string(),
+            ))?
             .first()
-            .unwrap();
+            .ok_or(LdapOperationError::MissingAttribute(
+                "subschemaSubentry".to_string(),
+            ))?;
         return Ok(Some(RootDSE {
             supported_ldap_version: supported_ldap_version.to_string(),
             supported_controls: supported_controls
@@ -461,12 +534,16 @@ pub enum LdapSchemaError {
     LdapOperationError(#[from] LdapOperationError),
     /// an error while parsing the retrieved schema
     #[error("chumsky parser error: {0}")]
-    ChumskyError(#[from] ChumskyError),
+    ChumskyError(#[from] ChumskyError<chumsky::error::Rich<'static, char>>),
 }
 
 /// Retrieve the LDAP schema from an LDAP server using ldap3
 ///
 /// tested with OpenLDAP
+///
+/// # Errors
+///
+/// fails if the underlying ldap query or the parsing of the results of that query fail
 #[instrument(skip(ldap))]
 pub async fn query_ldap_schema(ldap: &mut Ldap) -> Result<Option<LDAPSchema>, LdapSchemaError> {
     if let Some(root_dse) = query_root_dse(ldap).await? {
@@ -489,79 +566,96 @@ pub async fn query_ldap_schema(ldap: &mut Ldap) -> Result<Option<LDAPSchema>, Ld
             let ldap_syntaxes = entry
                 .attrs
                 .get("ldapSyntaxes")
-                .unwrap()
+                .ok_or(LdapOperationError::MissingAttribute(
+                    "ldapSyntaxes".to_string(),
+                ))?
                 .iter()
-                .map(|x| match ldap_syntax_parser().parse_recovery(x.as_str()) {
+                .map(|x| match ldap_syntax_parser().parse(x.as_str()).into_output_errors() {
                     (Some(ldap_syntax), _) => Ok(ldap_syntax),
                     (_, errs) => Err(ChumskyError {
                         description: "ldap syntax".to_string(),
                         source: x.to_string(),
-                        errors: errs,
+                        errors: errs.into_iter().map(|e| e.into_owned()).collect(),
                     }),
                 })
-                .collect::<Result<Vec<LDAPSyntax>, ChumskyError>>()?;
+                .collect::<Result<Vec<LDAPSyntax>, ChumskyError<chumsky::error::Rich<'static, char>>>>()?;
             let matching_rules = entry
                 .attrs
                 .get("matchingRules")
-                .unwrap()
+                .ok_or(LdapOperationError::MissingAttribute(
+                    "matchingRules".to_string(),
+                ))?
                 .iter()
                 .map(
-                    |x| match matching_rule_parser().parse_recovery(x.as_str()) {
+                    |x| match matching_rule_parser().parse(x.as_str()).into_output_errors() {
                         (Some(matching_rule), _) => Ok(matching_rule),
                         (_, errs) => Err(ChumskyError {
                             description: "matching rule".to_string(),
                             source: x.to_string(),
-                            errors: errs,
+                            errors: errs.into_iter().map(|e| e.into_owned()).collect(),
                         }),
                     },
                 )
-                .collect::<Result<Vec<MatchingRule>, ChumskyError>>()?;
-            let matching_rule_use = entry
-                .attrs
-                .get("matchingRuleUse")
-                .unwrap()
-                .iter()
-                .map(
-                    |x| match matching_rule_use_parser().parse_recovery(x.as_str()) {
-                        (Some(matching_rule_use), _) => Ok(matching_rule_use),
-                        (_, errs) => Err(ChumskyError {
-                            description: "matching rule use".to_string(),
-                            source: x.to_string(),
-                            errors: errs,
-                        }),
-                    },
-                )
-                .collect::<Result<Vec<MatchingRuleUse>, ChumskyError>>()?;
+                .collect::<Result<Vec<MatchingRule>, ChumskyError<chumsky::error::Rich<'static, char>>>>()?;
+            let matching_rule_use =
+                entry
+                    .attrs
+                    .get("matchingRuleUse")
+                    .ok_or(LdapOperationError::MissingAttribute(
+                        "matchingRuleUse".to_string(),
+                    ))?
+                    .iter()
+                    .map(|x| {
+                        match matching_rule_use_parser()
+                            .parse(x.as_str())
+                            .into_output_errors()
+                        {
+                            (Some(matching_rule_use), _) => Ok(matching_rule_use),
+                            (_, errs) => Err(ChumskyError {
+                                description: "matching rule use".to_string(),
+                                source: x.to_string(),
+                                errors: errs.into_iter().map(|e| e.into_owned()).collect(),
+                            }),
+                        }
+                    })
+                    .collect::<Result<
+                        Vec<MatchingRuleUse>,
+                        ChumskyError<chumsky::error::Rich<'static, char>>,
+                    >>()?;
             let attribute_types = entry
                 .attrs
                 .get("attributeTypes")
-                .unwrap()
+                .ok_or(LdapOperationError::MissingAttribute(
+                    "attributeTypes".to_string(),
+                ))?
                 .iter()
                 .map(
-                    |x| match attribute_type_parser().parse_recovery(x.as_str()) {
+                    |x| match attribute_type_parser().parse(x.as_str()).into_output_errors() {
                         (Some(attribute_type), _) => Ok(attribute_type),
                         (_, errs) => Err(ChumskyError {
                             description: "attribute type".to_string(),
                             source: x.to_string(),
-                            errors: errs,
+                            errors: errs.into_iter().map(|e| e.into_owned()).collect(),
                         }),
                     },
                 )
-                .collect::<Result<Vec<AttributeType>, ChumskyError>>()?;
+                .collect::<Result<Vec<AttributeType>, ChumskyError<chumsky::error::Rich<'static, char>>>>()?;
             let object_classes = entry
                 .attrs
                 .get("objectClasses")
-                .unwrap()
+                .ok_or(LdapOperationError::MissingAttribute(
+                    "objectClasses".to_string(),
+                ))?
                 .iter()
-                .map(|x| match object_class_parser().parse_recovery(x.as_str()) {
+                .map(|x| match object_class_parser().parse(x.as_str()).into_output_errors() {
                     (Some(object_class), _) => Ok(object_class),
                     (_, errs) => Err(ChumskyError {
                         description: "object class".to_string(),
                         source: x.to_string(),
-                        errors: errs,
+                        errors: errs.into_iter().map(|e| e.into_owned()).collect(),
                     }),
                 })
-                .collect::<Result<Vec<ObjectClass>, ChumskyError>>()?;
+                .collect::<Result<Vec<ObjectClass>, ChumskyError<chumsky::error::Rich<'static, char>>>>()?;
             return Ok(Some(LDAPSchema {
                 ldap_syntaxes,
                 matching_rules,
@@ -575,6 +669,10 @@ pub async fn query_ldap_schema(ldap: &mut Ldap) -> Result<Option<LDAPSchema>, Ld
 }
 
 /// check if an [ldap3::LdapResult] is either a success or the success code returned by an operation using the [noop_control]
+///
+/// # Errors
+///
+/// fails if the LDAP result code is neither of the success codes
 pub fn success_or_noop_success(
     ldap_result: ldap3::LdapResult,
 ) -> ldap3::result::Result<ldap3::LdapResult> {
@@ -587,6 +685,10 @@ pub fn success_or_noop_success(
 }
 
 /// delete an LDAP entry recursively using ldap3
+///
+/// # Errors
+///
+/// fails if the underlying individual delete operations fail
 #[instrument(skip(ldap))]
 pub async fn delete_recursive(
     ldap: &mut Ldap,
@@ -658,6 +760,10 @@ where
 /// The operations should not include the Base-DN in its internally stored DNs
 /// It will be added automatically. This allows for easier generation of comparisons
 /// between objects on two different LDAP servers with different base DNs.
+///
+/// # Errors
+///
+/// fails if the underlying individual ldap operations fail
 #[instrument(skip(ldap, ldap_operations))]
 pub async fn apply_ldap_operations(
     ldap: &mut Ldap,
@@ -676,7 +782,7 @@ pub async fn apply_ldap_operations(
                 attrs,
                 bin_attrs,
             }) => {
-                let full_dn = format!("{},{}", dn, ldap_base_dn);
+                let full_dn = format!("{dn},{ldap_base_dn}");
                 tracing::debug!(
                     "Adding LDAP entry at {} with attributes\n{:#?}\nand binary attributes\n{:#?}",
                     &full_dn,
@@ -708,12 +814,12 @@ pub async fn apply_ldap_operations(
                     .success()?;
             }
             LDAPOperation::Delete { dn } => {
-                let full_dn = format!("{},{}", dn, ldap_base_dn);
+                let full_dn = format!("{dn},{ldap_base_dn}");
                 tracing::debug!("Deleting LDAP entry at {}", &full_dn);
                 delete_recursive(ldap, &full_dn, controls.to_owned()).await?;
             }
             LDAPOperation::Modify { dn, mods, bin_mods } => {
-                let full_dn = format!("{},{}", dn, ldap_base_dn);
+                let full_dn = format!("{dn},{ldap_base_dn}");
                 tracing::debug!("Modifying LDAP entry at {} with modifications\n{:#?}\nand binary modifications\n{:#?}", &full_dn, mods, bin_mods);
                 let mut combined_mods = bin_mods.to_owned();
                 combined_mods.extend(mods_as_bin_mods(mods));
@@ -730,6 +836,10 @@ pub async fn apply_ldap_operations(
 
 /// helper function to search an LDAP server and generate [LDAPEntry] values
 /// with the base DN removed to make them server-independent
+///
+/// # Errors
+///
+/// fails if the underlying ldap_search fails
 #[instrument(skip(ldap, entries))]
 pub async fn search_entries(
     ldap: &mut Ldap,
@@ -742,7 +852,7 @@ pub async fn search_entries(
 ) -> Result<(), LdapOperationError> {
     let it = ldap_search(
         ldap,
-        &format!("{},{}", search_base, base_dn),
+        &format!("{search_base},{base_dn}"),
         scope,
         filter,
         attrs.to_owned(),
@@ -772,6 +882,10 @@ pub async fn search_entries(
 
 /// generate an [ldap3::Mod] if there is a DN-valued attribute in the source
 /// entry that needs its base DN translated to the destination base DN
+///
+/// # Errors
+///
+/// Returns `LdapOperationError` if there is an issue parsing OIDs or if a required attribute is missing.
 #[instrument(skip(
     source_entry,
     source_ldap_schema,
@@ -788,13 +902,7 @@ pub fn mod_value(
     destination_entry: Option<&LDAPEntry>,
     destination_base_dn: &str,
     ignore_object_classes: &[String],
-) -> Option<ldap3::Mod<String>> {
-    lazy_static! {
-        static ref DN_SYNTAX_OID: OIDWithLength = OIDWithLength {
-            oid: ObjectIdentifier::try_from("1.3.6.1.4.1.1466.115.121.1.12").unwrap(),
-            length: None
-        };
-    }
+) -> Result<Option<ldap3::Mod<String>>, LdapOperationError> {
     if let Some(values) = source_entry.attrs.get(attr_name) {
         let mut replacement_values = HashSet::from_iter(values.iter().cloned());
         if attr_name == "objectClass" {
@@ -810,7 +918,11 @@ pub fn mod_value(
             attr_type_syntax
         );
         if let Some(syntax) = attr_type_syntax {
-            if DN_SYNTAX_OID.eq(syntax) {
+            if (*DN_SYNTAX_OID)
+                .as_ref()
+                .map_err(|e| OIDError(*e))?
+                .eq(syntax)
+            {
                 tracing::trace!(
                     "Replacing base DN {} with base DN {}",
                     source_base_dn,
@@ -832,7 +944,7 @@ pub fn mod_value(
                 tracing::trace!("Checking if replacement values and destination values are identical (case sensitive):\n{:#?}\n{:#?}", destination_values, replacement_values_sorted);
                 if replacement_values_sorted == destination_values {
                     tracing::trace!("Skipping attribute {} because replacement values and destination values are identical (case sensitive)", attr_name);
-                    return None;
+                    return Ok(None);
                 }
                 let attr_type_equality = source_ldap_schema
                     .find_attribute_type_property(attr_name, |at| at.equality.as_ref());
@@ -856,25 +968,35 @@ pub fn mod_value(
                         tracing::trace!("Checking if replacement values and destination values are identical (case insensitive):\n{:#?}\n{:#?}", lower_destination_values, lower_replacement_values);
                         if lower_destination_values == lower_replacement_values {
                             tracing::trace!("Skipping attribute {} because replacement values and destination values are identical (case insensitive)", attr_name);
-                            return None;
+                            return Ok(None);
                         }
                     }
                 }
             }
         }
-        Some(ldap3::Mod::Replace(
+        Ok(Some(ldap3::Mod::Replace(
             attr_name.to_string(),
             replacement_values,
-        ))
+        )))
     } else {
-        Some(ldap3::Mod::Delete(attr_name.to_string(), HashSet::new()))
+        Ok(Some(ldap3::Mod::Delete(
+            attr_name.to_string(),
+            HashSet::new(),
+        )))
     }
 }
 
 /// diff two sets of LDAPEntries which had their base DNs removed
 /// and generates LDAP operations (add, update, delete) to apply to
 /// the destination to make it identical to the source
-#[allow(clippy::too_many_arguments)]
+///
+/// # Errors
+///
+/// Returns `LdapOperationError` if there is an issue parsing OIDs or if a required attribute is missing.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "factoring parameters into objects is not sensible since this is basically standalone without many connections to the rest of the crate"
+)]
 #[instrument(skip(source_ldap_schema))]
 pub fn diff_entries(
     source_entries: &HashMap<String, LDAPEntry>,
@@ -887,13 +1009,7 @@ pub fn diff_entries(
     add: bool,
     update: bool,
     delete: bool,
-) -> Vec<LDAPOperation> {
-    lazy_static! {
-        static ref DN_SYNTAX_OID: OIDWithLength = OIDWithLength {
-            oid: ObjectIdentifier::try_from("1.3.6.1.4.1.1466.115.121.1.12").unwrap(),
-            length: None
-        };
-    }
+) -> Result<Vec<LDAPOperation>, LdapOperationError> {
     let diff = Diff::diff(source_entries, destination_entries);
     tracing::trace!("Diff:\n{:#?}", diff);
     let mut ldap_operations: Vec<LDAPOperation> = vec![];
@@ -921,7 +1037,7 @@ pub fn diff_entries(
                                 destination_entry,
                                 destination_base_dn,
                                 ignore_object_classes,
-                            );
+                            )?;
                             if let Some(m) = m {
                                 if !ldap_mods.contains(&m) {
                                     ldap_mods.push(m);
@@ -935,8 +1051,14 @@ pub fn diff_entries(
                 if ignore_attributes.contains(attr_name) {
                     continue;
                 }
-                let mut replacement_values =
-                    HashSet::from_iter(source_entry.attrs[attr_name].iter().cloned());
+                let mut replacement_values = HashSet::from_iter(
+                    source_entry
+                        .attrs
+                        .get(attr_name)
+                        .ok_or(LdapOperationError::MissingAttribute(attr_name.clone()))?
+                        .iter()
+                        .cloned(),
+                );
                 if attr_name == "objectClass" {
                     for io in ignore_object_classes {
                         replacement_values.remove(io);
@@ -950,7 +1072,11 @@ pub fn diff_entries(
                     attr_type_syntax
                 );
                 if let Some(syntax) = attr_type_syntax {
-                    if DN_SYNTAX_OID.eq(syntax) {
+                    if (*DN_SYNTAX_OID)
+                        .as_ref()
+                        .map_err(|e| OIDError(*e))?
+                        .eq(syntax)
+                    {
                         tracing::trace!(
                             "Replacing base DN {} with base DN {}",
                             source_base_dn,
@@ -979,7 +1105,7 @@ pub fn diff_entries(
                                     HashSet::from_iter(values.iter().cloned()),
                                 );
                                 if !ldap_bin_mods.contains(&replace_mod) {
-                                    ldap_bin_mods.push(replace_mod)
+                                    ldap_bin_mods.push(replace_mod);
                                 }
                             } else {
                                 ldap_bin_mods.push(ldap3::Mod::Delete(
@@ -997,7 +1123,14 @@ pub fn diff_entries(
                 }
                 ldap_bin_mods.push(ldap3::Mod::Add(
                     attr_name.as_bytes().to_vec(),
-                    HashSet::from_iter(source_entry.bin_attrs[attr_name].iter().cloned()),
+                    HashSet::from_iter(
+                        source_entry
+                            .bin_attrs
+                            .get(attr_name)
+                            .ok_or(LdapOperationError::MissingAttribute(attr_name.clone()))?
+                            .iter()
+                            .cloned(),
+                    ),
                 ));
             }
             if update && !(ldap_mods.is_empty() && ldap_bin_mods.is_empty()) {
@@ -1025,7 +1158,7 @@ pub fn diff_entries(
                 let new_v = v.into_iter().filter(|x| !ioc.contains(x)).collect();
                 new_entry.attrs.insert(k, new_v);
             }
-            for (attr_name, attr_values) in new_entry.attrs.iter_mut() {
+            for (attr_name, attr_values) in &mut new_entry.attrs {
                 let attr_type_syntax = source_ldap_schema
                     .find_attribute_type_property(attr_name, |at| at.syntax.as_ref());
                 tracing::trace!(
@@ -1035,7 +1168,11 @@ pub fn diff_entries(
                     attr_type_syntax
                 );
                 if let Some(syntax) = attr_type_syntax {
-                    if DN_SYNTAX_OID.eq(syntax) {
+                    if (*DN_SYNTAX_OID)
+                        .as_ref()
+                        .map_err(|e| OIDError(*e))?
+                        .eq(syntax)
+                    {
                         tracing::trace!(
                             "Replacing base DN {} with base DN {}",
                             source_base_dn,
@@ -1056,5 +1193,5 @@ pub fn diff_entries(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    ldap_operations
+    Ok(ldap_operations)
 }
