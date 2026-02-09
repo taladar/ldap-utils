@@ -30,7 +30,7 @@ version = "3.0.1"
 version = "0.14.0"
 
 [dependencies.ldap-types]
-version = "0.7.1"
+version = "0.7.2"
 
 [dependencies.ldap3]
 version = "0.12.1"
@@ -46,21 +46,21 @@ version = "0.3.0"
 version = "0.10"
 
 [dependencies.regex]
-version = "1.12.2"
+version = "1.12.3"
 
 [dependencies.serde]
 version = "1.0.228"
 features = ["derive"]
 
 [dependencies.thiserror]
-version = "2.0.17"
+version = "2.0.18"
 
 [dependencies.tokio]
 version = "1.49.0"
 features = ["full"]
 
 [dependencies.toml]
-version = "0.9.10"
+version = "0.9.11"
 
 [dependencies.tracing]
 version = "0.1.44"
