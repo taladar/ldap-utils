@@ -5,7 +5,9 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 version = "0.6.4"
 authors = ["Matthias Hörmann <mhoermann@gmail.com>"]
-edition = "2021"
+edition = "2024"
+resolver = "3"
+rust-version = "1.94.0"
 repository = "https://github.com/taladar/ldap-utils"
 keywords = ["ldap", "schema", "ldap3"]
 categories = ["parsing"]
@@ -25,6 +27,9 @@ version = "0.5.3"
 
 [dependencies.dirs2]
 version = "3.0.1"
+
+[dependencies.fs-err]
+version = "3.3.0"
 
 [dependencies.itertools]
 version = "0.14.0"
@@ -280,4 +285,5 @@ zero_sized_map_values = "deny"
 [lints.rustdoc]
 broken_intra_doc_links = "deny"
 missing_crate_level_docs = "warn"
-unescaped_backticks = "warn"
+unescaped_backticks = "deny"
+private_intra_doc_links = "deny"

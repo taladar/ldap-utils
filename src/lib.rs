@@ -5,9 +5,9 @@ use diff::{Diff, VecDiffType};
 use chumsky::Parser as _;
 use ldap_types::basic::{ChumskyError, LDAPEntry, LDAPOperation, OIDWithLength, RootDSE};
 use ldap_types::schema::{
+    AttributeType, LDAPSchema, LDAPSyntax, MatchingRule, MatchingRuleUse, ObjectClass,
     attribute_type_parser, ldap_syntax_parser, matching_rule_parser, matching_rule_use_parser,
-    object_class_parser, AttributeType, LDAPSchema, LDAPSyntax, MatchingRule, MatchingRuleUse,
-    ObjectClass,
+    object_class_parser,
 };
 
 use ldap3::exop::{WhoAmI, WhoAmIResp};
@@ -133,7 +133,7 @@ pub fn openldap_connect_parameters(
         let ldap_rc_filename = d.join(".ldaprc");
         if ldap_rc_filename.exists() {
             tracing::debug!("Using .ldaprc at {:?}", ldap_rc_filename);
-            ldap_rc_content = std::fs::read_to_string(ldap_rc_filename)?;
+            ldap_rc_content = fs_err::read_to_string(ldap_rc_filename)?;
 
             let ca_cert_re = Regex::new(r"^TLS_CACERT *(.*)$")?;
             let client_cert_re = Regex::new(r"^TLS_CERT *(.*)$")?;
@@ -174,7 +174,7 @@ pub fn openldap_connect_parameters(
         }
         if ldap_conf_filename.exists() {
             tracing::debug!("Using ldap.conf at {:?}", ldap_conf_filename);
-            ldap_conf_content = std::fs::read_to_string(ldap_conf_filename)?;
+            ldap_conf_content = fs_err::read_to_string(ldap_conf_filename)?;
 
             let uri_re = Regex::new(r"^URI *(.*)$")?;
             for line in ldap_conf_content.lines() {
@@ -231,7 +231,7 @@ pub enum TomlConfigError {
 pub fn toml_connect_parameters(
     filename: std::path::PathBuf,
 ) -> Result<ConnectParameters, TomlConfigError> {
-    let config = std::fs::read_to_string(filename)?;
+    let config = fs_err::read_to_string(filename)?;
     let result: ConnectParameters = toml::from_str(&config)?;
 
     Ok(result)
@@ -286,7 +286,10 @@ pub async fn connect() -> Result<(Ldap, std::string::String), ConnectError> {
             match builder.build() {
                 Ok(result) => connect_with_parameters(result).await,
                 Err(err) => {
-                    tracing::error!("Building of ConnectParameters based on OpenLDAP config files and substituting default values for missing values failed: {}", err);
+                    tracing::error!(
+                        "Building of ConnectParameters based on OpenLDAP config files and substituting default values for missing values failed: {}",
+                        err
+                    );
                     Err(ConnectError::ParametersBuilderError(err))
                 }
             }
@@ -820,7 +823,12 @@ pub async fn apply_ldap_operations(
             }
             LDAPOperation::Modify { dn, mods, bin_mods } => {
                 let full_dn = format!("{dn},{ldap_base_dn}");
-                tracing::debug!("Modifying LDAP entry at {} with modifications\n{:#?}\nand binary modifications\n{:#?}", &full_dn, mods, bin_mods);
+                tracing::debug!(
+                    "Modifying LDAP entry at {} with modifications\n{:#?}\nand binary modifications\n{:#?}",
+                    &full_dn,
+                    mods,
+                    bin_mods
+                );
                 let mut combined_mods = bin_mods.to_owned();
                 combined_mods.extend(mods_as_bin_mods(mods));
                 ldap.with_controls(controls.to_owned())
@@ -917,60 +925,73 @@ pub fn mod_value(
             attr_name,
             attr_type_syntax
         );
-        if let Some(syntax) = attr_type_syntax {
-            if (*DN_SYNTAX_OID)
+        if let Some(syntax) = attr_type_syntax
+            && (*DN_SYNTAX_OID)
                 .as_ref()
                 .map_err(|e| OIDError(*e))?
                 .eq(syntax)
-            {
-                tracing::trace!(
-                    "Replacing base DN {} with base DN {}",
-                    source_base_dn,
-                    destination_base_dn
-                );
-                replacement_values = replacement_values
-                    .into_iter()
-                    .map(|s| s.replace(source_base_dn, destination_base_dn))
-                    .collect();
-            }
+        {
+            tracing::trace!(
+                "Replacing base DN {} with base DN {}",
+                source_base_dn,
+                destination_base_dn
+            );
+            replacement_values = replacement_values
+                .into_iter()
+                .map(|s| s.replace(source_base_dn, destination_base_dn))
+                .collect();
         }
-        if let Some(destination_entry) = destination_entry {
-            if let Some(destination_values) = destination_entry.attrs.get(attr_name) {
-                let mut replacement_values_sorted: Vec<String> =
-                    replacement_values.iter().cloned().collect();
-                replacement_values_sorted.sort();
-                let mut destination_values: Vec<String> = destination_values.to_vec();
-                destination_values.sort();
-                tracing::trace!("Checking if replacement values and destination values are identical (case sensitive):\n{:#?}\n{:#?}", destination_values, replacement_values_sorted);
-                if replacement_values_sorted == destination_values {
-                    tracing::trace!("Skipping attribute {} because replacement values and destination values are identical (case sensitive)", attr_name);
-                    return Ok(None);
-                }
-                let attr_type_equality = source_ldap_schema
-                    .find_attribute_type_property(attr_name, |at| at.equality.as_ref());
+        if let Some(destination_entry) = destination_entry
+            && let Some(destination_values) = destination_entry.attrs.get(attr_name)
+        {
+            let mut replacement_values_sorted: Vec<String> =
+                replacement_values.iter().cloned().collect();
+            replacement_values_sorted.sort();
+            let mut destination_values: Vec<String> = destination_values.to_vec();
+            destination_values.sort();
+            tracing::trace!(
+                "Checking if replacement values and destination values are identical (case sensitive):\n{:#?}\n{:#?}",
+                destination_values,
+                replacement_values_sorted
+            );
+            if replacement_values_sorted == destination_values {
                 tracing::trace!(
-                    "Attribute type equality for altered attribute {}: {:#?}",
-                    attr_name,
-                    attr_type_equality
+                    "Skipping attribute {} because replacement values and destination values are identical (case sensitive)",
+                    attr_name
                 );
-                if let Some(equality) = &attr_type_equality {
-                    if equality.describes_case_insensitive_match() {
-                        let mut lower_destination_values: Vec<String> = destination_values
-                            .iter()
-                            .map(|s| s.to_lowercase())
-                            .collect();
-                        lower_destination_values.sort();
-                        let mut lower_replacement_values: Vec<String> = replacement_values
-                            .iter()
-                            .map(|s| s.to_lowercase())
-                            .collect();
-                        lower_replacement_values.sort();
-                        tracing::trace!("Checking if replacement values and destination values are identical (case insensitive):\n{:#?}\n{:#?}", lower_destination_values, lower_replacement_values);
-                        if lower_destination_values == lower_replacement_values {
-                            tracing::trace!("Skipping attribute {} because replacement values and destination values are identical (case insensitive)", attr_name);
-                            return Ok(None);
-                        }
-                    }
+                return Ok(None);
+            }
+            let attr_type_equality = source_ldap_schema
+                .find_attribute_type_property(attr_name, |at| at.equality.as_ref());
+            tracing::trace!(
+                "Attribute type equality for altered attribute {}: {:#?}",
+                attr_name,
+                attr_type_equality
+            );
+            if let Some(equality) = &attr_type_equality
+                && equality.describes_case_insensitive_match()
+            {
+                let mut lower_destination_values: Vec<String> = destination_values
+                    .iter()
+                    .map(|s| s.to_lowercase())
+                    .collect();
+                lower_destination_values.sort();
+                let mut lower_replacement_values: Vec<String> = replacement_values
+                    .iter()
+                    .map(|s| s.to_lowercase())
+                    .collect();
+                lower_replacement_values.sort();
+                tracing::trace!(
+                    "Checking if replacement values and destination values are identical (case insensitive):\n{:#?}\n{:#?}",
+                    lower_destination_values,
+                    lower_replacement_values
+                );
+                if lower_destination_values == lower_replacement_values {
+                    tracing::trace!(
+                        "Skipping attribute {} because replacement values and destination values are identical (case insensitive)",
+                        attr_name
+                    );
+                    return Ok(None);
                 }
             }
         }
@@ -1038,10 +1059,10 @@ pub fn diff_entries(
                                 destination_base_dn,
                                 ignore_object_classes,
                             )?;
-                            if let Some(m) = m {
-                                if !ldap_mods.contains(&m) {
-                                    ldap_mods.push(m);
-                                }
+                            if let Some(m) = m
+                                && !ldap_mods.contains(&m)
+                            {
+                                ldap_mods.push(m);
                             }
                         }
                     }
@@ -1071,22 +1092,21 @@ pub fn diff_entries(
                     attr_name,
                     attr_type_syntax
                 );
-                if let Some(syntax) = attr_type_syntax {
-                    if (*DN_SYNTAX_OID)
+                if let Some(syntax) = attr_type_syntax
+                    && (*DN_SYNTAX_OID)
                         .as_ref()
                         .map_err(|e| OIDError(*e))?
                         .eq(syntax)
-                    {
-                        tracing::trace!(
-                            "Replacing base DN {} with base DN {}",
-                            source_base_dn,
-                            destination_base_dn
-                        );
-                        replacement_values = replacement_values
-                            .into_iter()
-                            .map(|s| s.replace(source_base_dn, destination_base_dn))
-                            .collect();
-                    }
+                {
+                    tracing::trace!(
+                        "Replacing base DN {} with base DN {}",
+                        source_base_dn,
+                        destination_base_dn
+                    );
+                    replacement_values = replacement_values
+                        .into_iter()
+                        .map(|s| s.replace(source_base_dn, destination_base_dn))
+                        .collect();
                 }
                 ldap_mods.push(ldap3::Mod::Add(attr_name.to_string(), replacement_values));
             }
@@ -1167,20 +1187,19 @@ pub fn diff_entries(
                     removed_dn,
                     attr_type_syntax
                 );
-                if let Some(syntax) = attr_type_syntax {
-                    if (*DN_SYNTAX_OID)
+                if let Some(syntax) = attr_type_syntax
+                    && (*DN_SYNTAX_OID)
                         .as_ref()
                         .map_err(|e| OIDError(*e))?
                         .eq(syntax)
-                    {
-                        tracing::trace!(
-                            "Replacing base DN {} with base DN {}",
-                            source_base_dn,
-                            destination_base_dn
-                        );
-                        for s in attr_values.iter_mut() {
-                            *s = s.replace(source_base_dn, destination_base_dn);
-                        }
+                {
+                    tracing::trace!(
+                        "Replacing base DN {} with base DN {}",
+                        source_base_dn,
+                        destination_base_dn
+                    );
+                    for s in attr_values.iter_mut() {
+                        *s = s.replace(source_base_dn, destination_base_dn);
                     }
                 }
             }
