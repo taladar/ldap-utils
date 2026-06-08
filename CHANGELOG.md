@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.5 - 2026-06-08 12:25:11Z
+
+### ⚙️ Miscellaneous Tasks
+
+- *(template)* Update repository to latest cargo-generate template standards
+- *(template)* Sync with latest lib cargo-generate template
+- *(dependencies)* Update dependencies
+
 ## 0.6.4 - 2026-04-07 14:19:01Z
 
 ### ⚙️ Miscellaneous Tasks
