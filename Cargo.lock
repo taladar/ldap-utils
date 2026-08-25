@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "ldap-utils"
-version = "0.6.5"
+version = "0.6.6"
 dependencies = [
  "chumsky",
  "derive_builder",
