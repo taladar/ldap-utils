@@ -868,7 +868,7 @@ pub async fn search_entries(
     .await?;
     for entry in it {
         tracing::debug!("Found entry {}", entry.dn);
-        if let Some(s) = entry.dn.strip_suffix(&format!(",{}", &base_dn)) {
+        if let Some(s) = entry.dn.strip_suffix(&format!(",{base_dn}")) {
             entries.insert(
                 s.to_string(),
                 LDAPEntry {
