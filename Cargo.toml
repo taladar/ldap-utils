@@ -68,6 +68,9 @@ version = "1.2.1"
 [dependencies.tracing]
 version = "0.1.44"
 
+[dev-dependencies.pretty_assertions]
+version = "1.4.1"
+
 [profile.release]
 # do not strip debug info from release builds, useful for debugging those, cargo-flamegraph profiling or similar use cases
 debug = true

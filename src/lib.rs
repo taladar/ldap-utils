@@ -11,7 +11,6 @@ use ldap_types::schema::{
 };
 
 use ldap3::exop::{WhoAmI, WhoAmIResp};
-use ldap3::result::SearchResult;
 use ldap3::{Ldap, LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 use native_tls::{Certificate, Identity, TlsConnector};
 use oid::ObjectIdentifier;
@@ -30,6 +29,7 @@ pub static DN_SYNTAX_OID: LazyLock<Result<OIDWithLength, oid::ObjectIdentifierEr
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fmt::Display;
+use std::fmt::Write as _;
 
 use openssl::pkcs12::Pkcs12;
 use openssl::pkey::PKey;
@@ -361,10 +361,374 @@ pub enum LdapOperationError {
     /// An expected attribute was missing from the LDAP entry.
     #[error("Missing expected attribute: {0}")]
     MissingAttribute(String),
+    /// an LDAP operation failed, with the details of the operation needed
+    /// to understand and reproduce the failure
+    #[error("{operation} failed: {}", describe_ldap3_error(.operation, .source))]
+    OperationFailed {
+        /// the operation that failed
+        operation: Box<FailedLdapOperation>,
+        /// the error returned by ldap3
+        #[source]
+        source: ldap3::LdapError,
+    },
 }
 
-/// perform an LDAP search via ldap3, logging a proper error message if it fails
-/// and returning an iterator to already unwrapped search entries
+impl LdapOperationError {
+    /// if this error is a noSuchObject (rc=32) result of an LDAP operation
+    /// this returns the classification of which part of the requested DN
+    /// is missing
+    #[must_use]
+    pub fn no_such_object(&self) -> Option<NoSuchObject> {
+        match self {
+            Self::OperationFailed {
+                operation,
+                source: ldap3::LdapError::LdapResult { result },
+            } if result.rc == LDAP_RC_NO_SUCH_OBJECT => {
+                Some(NoSuchObject::classify(operation.dn(), &result.matched))
+            }
+            Self::LdapError(_)
+            | Self::OIDError(_)
+            | Self::MissingAttribute(_)
+            | Self::OperationFailed { .. } => None,
+        }
+    }
+
+    /// the LDAP operation that failed, if this error is the result of a
+    /// failed LDAP operation
+    #[must_use]
+    pub const fn operation(&self) -> Option<&FailedLdapOperation> {
+        match self {
+            Self::OperationFailed { operation, .. } => Some(operation),
+            Self::LdapError(_) | Self::OIDError(_) | Self::MissingAttribute(_) => None,
+        }
+    }
+}
+
+/// the LDAP result code for noSuchObject
+const LDAP_RC_NO_SUCH_OBJECT: u32 = 32;
+
+/// an LDAP operation that failed, with the parameters needed to understand
+/// and reproduce the failure
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum FailedLdapOperation {
+    /// an LDAP search
+    Search {
+        /// the search base DN
+        base: String,
+        /// the search scope
+        scope: Scope,
+        /// the search filter
+        filter: String,
+        /// the requested attributes
+        attrs: Vec<String>,
+    },
+    /// adding an LDAP entry
+    Add {
+        /// the DN of the entry to add
+        dn: String,
+    },
+    /// modifying an LDAP entry
+    Modify {
+        /// the DN of the entry to modify
+        dn: String,
+    },
+    /// deleting an LDAP entry
+    Delete {
+        /// the DN of the entry to delete
+        dn: String,
+    },
+}
+
+impl FailedLdapOperation {
+    /// the DN the operation was performed on (the base DN for searches)
+    #[must_use]
+    pub fn dn(&self) -> &str {
+        match self {
+            Self::Search { base, .. } => base,
+            Self::Add { dn } | Self::Modify { dn } | Self::Delete { dn } => dn,
+        }
+    }
+
+    /// an ldapsearch command line that performs the same search, for
+    /// reproducing a failed search manually
+    #[must_use]
+    pub fn ldapsearch_command(&self) -> Option<String> {
+        match self {
+            Self::Search {
+                base,
+                scope,
+                filter,
+                attrs,
+            } => Some(format!(
+                "ldapsearch -Q -LLL -o ldif-wrap=no -b '{}' -s {} '{}' {}",
+                base,
+                ldapsearch_scope_name(*scope),
+                filter,
+                itertools::join(attrs.iter(), " ")
+            )),
+            Self::Add { .. } | Self::Modify { .. } | Self::Delete { .. } => None,
+        }
+    }
+}
+
+impl Display for FailedLdapOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Search {
+                base,
+                scope,
+                filter,
+                attrs,
+            } => write!(
+                f,
+                "LDAP search (base: '{}', scope: {}, filter: '{}', attributes: {})",
+                base,
+                ldapsearch_scope_name(*scope),
+                filter,
+                if attrs.is_empty() {
+                    "all".to_string()
+                } else {
+                    itertools::join(attrs.iter(), " ")
+                }
+            ),
+            Self::Add { dn } => write!(f, "LDAP add of '{dn}'"),
+            Self::Modify { dn } => write!(f, "LDAP modify of '{dn}'"),
+            Self::Delete { dn } => write!(f, "LDAP delete of '{dn}'"),
+        }
+    }
+}
+
+/// the name of a search scope as used by the -s option of ldapsearch
+const fn ldapsearch_scope_name(scope: Scope) -> &'static str {
+    match scope {
+        Scope::Base => "base",
+        Scope::OneLevel => "one",
+        Scope::Subtree => "sub",
+    }
+}
+
+/// the name of an LDAP result code as defined in RFC 4511 (and some common
+/// extensions)
+const fn ldap_result_code_name(rc: u32) -> &'static str {
+    match rc {
+        0 => "success",
+        1 => "operationsError",
+        2 => "protocolError",
+        3 => "timeLimitExceeded",
+        4 => "sizeLimitExceeded",
+        5 => "compareFalse",
+        6 => "compareTrue",
+        7 => "authMethodNotSupported",
+        8 => "strongerAuthRequired",
+        10 => "referral",
+        11 => "adminLimitExceeded",
+        12 => "unavailableCriticalExtension",
+        13 => "confidentialityRequired",
+        14 => "saslBindInProgress",
+        16 => "noSuchAttribute",
+        17 => "undefinedAttributeType",
+        18 => "inappropriateMatching",
+        19 => "constraintViolation",
+        20 => "attributeOrValueExists",
+        21 => "invalidAttributeSyntax",
+        32 => "noSuchObject",
+        33 => "aliasProblem",
+        34 => "invalidDNSyntax",
+        36 => "aliasDereferencingProblem",
+        48 => "inappropriateAuthentication",
+        49 => "invalidCredentials",
+        50 => "insufficientAccessRights",
+        51 => "busy",
+        52 => "unavailable",
+        53 => "unwillingToPerform",
+        54 => "loopDetect",
+        64 => "namingViolation",
+        65 => "objectClassViolation",
+        66 => "notAllowedOnNonLeaf",
+        67 => "notAllowedOnRDN",
+        68 => "entryAlreadyExists",
+        69 => "objectClassModsProhibited",
+        71 => "affectsMultipleDSAs",
+        80 => "other",
+        88 => "abandoned",
+        122 => "assertionFailed",
+        16654 => "noOperation",
+        _ => "unknown",
+    }
+}
+
+/// describe an error returned by ldap3 for a given operation in a way that
+/// helps with finding the cause
+fn describe_ldap3_error(operation: &FailedLdapOperation, error: &ldap3::LdapError) -> String {
+    match error {
+        ldap3::LdapError::LdapResult { result } => {
+            let mut description = if result.rc == LDAP_RC_NO_SUCH_OBJECT {
+                NoSuchObject::classify(operation.dn(), &result.matched).to_string()
+            } else {
+                let mut description =
+                    format!("rc={} ({})", result.rc, ldap_result_code_name(result.rc));
+                if !result.matched.is_empty() {
+                    write!(description, " (matched DN: '{}')", result.matched).ok();
+                }
+                description
+            };
+            if !result.text.is_empty() {
+                write!(description, ", server message: {}", result.text).ok();
+            }
+            if let Some(cmd) = operation.ldapsearch_command() {
+                write!(description, "\n  to reproduce: {cmd}").ok();
+            }
+            description
+        }
+        e => e.to_string(),
+    }
+}
+
+/// which part of a requested DN does not exist, determined from a
+/// noSuchObject result and the matched DN returned by the server
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NoSuchObjectKind {
+    /// the requested entry itself does not exist, its parent does
+    EntryMissing,
+    /// an ancestor of the requested entry does not exist
+    AncestorMissing {
+        /// the highest missing ancestor, the one directly below the matched DN
+        first_missing: String,
+    },
+    /// the server did not report any existing part of the DN, not even
+    /// the base DN of the directory
+    NothingMatched,
+    /// the matched DN returned by the server is not an ancestor of the
+    /// requested DN (or could not be compared to it)
+    Unclassified,
+}
+
+/// the classification of a noSuchObject (rc=32) LDAP result
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoSuchObject {
+    /// the DN that was requested (the search base for searches)
+    pub requested: String,
+    /// the matched DN returned by the server, the deepest existing ancestor
+    /// of the requested DN
+    pub matched: String,
+    /// which part of the requested DN is missing
+    pub kind: NoSuchObjectKind,
+}
+
+impl NoSuchObject {
+    /// classify a noSuchObject result based on the requested DN and the
+    /// matched DN returned by the server
+    #[must_use]
+    pub fn classify(requested: &str, matched: &str) -> Self {
+        let kind = if matched.trim().is_empty() {
+            NoSuchObjectKind::NothingMatched
+        } else {
+            let requested_rdns = split_dn(requested);
+            let matched_rdns = split_dn(matched);
+            let missing_count = requested_rdns.len().saturating_sub(matched_rdns.len());
+            let is_ancestor = missing_count > 0
+                && requested_rdns
+                    .iter()
+                    .skip(missing_count)
+                    .zip(matched_rdns.iter())
+                    .all(|(r, m)| normalize_rdn(r) == normalize_rdn(m));
+            if !is_ancestor {
+                NoSuchObjectKind::Unclassified
+            } else if missing_count == 1 {
+                NoSuchObjectKind::EntryMissing
+            } else {
+                NoSuchObjectKind::AncestorMissing {
+                    first_missing: itertools::join(
+                        requested_rdns.iter().skip(missing_count.saturating_sub(1)),
+                        ",",
+                    ),
+                }
+            }
+        };
+        Self {
+            requested: requested.to_string(),
+            matched: matched.to_string(),
+            kind,
+        }
+    }
+}
+
+impl Display for NoSuchObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.kind {
+            NoSuchObjectKind::EntryMissing => write!(
+                f,
+                "entry '{}' does not exist (noSuchObject, its parent '{}' does exist)",
+                self.requested, self.matched
+            ),
+            NoSuchObjectKind::AncestorMissing { first_missing } => write!(
+                f,
+                "'{}' does not exist, so neither does '{}' (noSuchObject, deepest existing ancestor: '{}')",
+                first_missing, self.requested, self.matched
+            ),
+            NoSuchObjectKind::NothingMatched => write!(
+                f,
+                "no part of '{}' exists on this server, not even the base of the directory (noSuchObject without matched DN); check the server and the base DN, entries hidden by access controls look the same",
+                self.requested
+            ),
+            NoSuchObjectKind::Unclassified => write!(
+                f,
+                "'{}' does not exist (noSuchObject, matched DN reported by the server: '{}')",
+                self.requested, self.matched
+            ),
+        }
+    }
+}
+
+/// split a DN string into its RDN strings on unescaped commas, trimming
+/// whitespace around each RDN
+fn split_dn(dn: &str) -> Vec<&str> {
+    let mut rdns = Vec::new();
+    let mut start = 0;
+    let mut escaped = false;
+    for (i, c) in dn.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == ',' {
+            if let Some(rdn) = dn.get(start..i) {
+                rdns.push(rdn.trim());
+            }
+            start = i.saturating_add(1);
+        }
+    }
+    if let Some(rdn) = dn.get(start..) {
+        let rdn = rdn.trim();
+        if !rdn.is_empty() || !rdns.is_empty() {
+            rdns.push(rdn);
+        }
+    }
+    rdns
+}
+
+/// normalize an RDN string for comparison, ignoring case and whitespace
+/// around the = and + separators
+///
+/// this is only meant for comparisons in error messages, it does not
+/// implement the matching rules of the individual attributes
+fn normalize_rdn(rdn: &str) -> String {
+    rdn.split('+')
+        .map(|ava| {
+            ava.split_once('=').map_or_else(
+                || ava.trim().to_lowercase(),
+                |(k, v)| format!("{}={}", k.trim().to_lowercase(), v.trim().to_lowercase()),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// perform an LDAP search via ldap3, returning an error that includes the
+/// search parameters if it fails and returning an iterator to already
+/// unwrapped search entries
 ///
 /// # Errors
 ///
@@ -376,26 +740,28 @@ pub async fn ldap_search<'a, S: AsRef<str> + Clone + Display + Debug + Send + Sy
     filter: &str,
     attrs: Vec<S>,
 ) -> Result<Box<dyn Iterator<Item = SearchEntry> + 'a>, LdapOperationError> {
-    let search_result = ldap.search(base, scope, filter, attrs.clone()).await?;
-    let SearchResult(_rs, res) = &search_result;
-    if res.rc != 0 {
-        tracing::debug!(
-            "Non-zero return code {} in LDAP query\n  base: {}\n  scope: {:?}\n  filter: {}\n  attrs: {:#?}",
-            res.rc,
-            base,
+    let operation = || {
+        Box::new(FailedLdapOperation::Search {
+            base: base.to_string(),
             scope,
-            filter,
-            attrs
-        );
-        tracing::debug!(
-            "ldapsearch -Q -LLL -o ldif-wrap=no -b '{}' -s {} '{}' {}",
-            base,
-            format!("{scope:?}").to_lowercase(),
-            filter,
-            itertools::join(attrs.iter(), " ")
-        );
-    }
-    let (rs, _res) = search_result.success()?;
+            filter: filter.to_string(),
+            attrs: attrs.iter().map(ToString::to_string).collect(),
+        })
+    };
+    let search_result = ldap
+        .search(base, scope, filter, attrs.clone())
+        .await
+        .map_err(|source| LdapOperationError::OperationFailed {
+            operation: operation(),
+            source,
+        })?;
+    let (rs, _res) =
+        search_result
+            .success()
+            .map_err(|source| LdapOperationError::OperationFailed {
+                operation: operation(),
+                source,
+            })?;
     Ok(Box::new(rs.into_iter().map(SearchEntry::construct)))
 }
 
@@ -715,7 +1081,17 @@ pub async fn delete_recursive(
     entries.sort_by_key(|b| std::cmp::Reverse(b.len()));
     for dn in entries {
         tracing::debug!("Deleting child entry {}", dn);
-        success_or_noop_success(ldap.with_controls(controls.to_owned()).delete(&dn).await?)?;
+        let delete_failed = |source| LdapOperationError::OperationFailed {
+            operation: Box::new(FailedLdapOperation::Delete { dn: dn.clone() }),
+            source,
+        };
+        success_or_noop_success(
+            ldap.with_controls(controls.to_owned())
+                .delete(&dn)
+                .await
+                .map_err(delete_failed)?,
+        )
+        .map_err(delete_failed)?;
     }
     Ok(())
 }
@@ -811,10 +1187,18 @@ pub async fn apply_ldap_operations(
                             .collect::<HashSet<Vec<u8>>>(),
                     )
                 }));
+                let add_failed = |source| LdapOperationError::OperationFailed {
+                    operation: Box::new(FailedLdapOperation::Add {
+                        dn: full_dn.clone(),
+                    }),
+                    source,
+                };
                 ldap.with_controls(controls.to_owned())
                     .add(&full_dn, combined_attrs)
-                    .await?
-                    .success()?;
+                    .await
+                    .map_err(add_failed)?
+                    .success()
+                    .map_err(add_failed)?;
             }
             LDAPOperation::Delete { dn } => {
                 let full_dn = format!("{dn},{ldap_base_dn}");
@@ -831,10 +1215,18 @@ pub async fn apply_ldap_operations(
                 );
                 let mut combined_mods = bin_mods.to_owned();
                 combined_mods.extend(mods_as_bin_mods(mods));
+                let modify_failed = |source| LdapOperationError::OperationFailed {
+                    operation: Box::new(FailedLdapOperation::Modify {
+                        dn: full_dn.clone(),
+                    }),
+                    source,
+                };
                 ldap.with_controls(controls.to_owned())
                     .modify(&full_dn, combined_mods.to_vec())
-                    .await?
-                    .success()?;
+                    .await
+                    .map_err(modify_failed)?
+                    .success()
+                    .map_err(modify_failed)?;
             }
         }
     }
@@ -1213,4 +1605,135 @@ pub fn diff_entries(
     });
 
     Ok(ldap_operations)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// the base DN used in the tests
+    const BASE: &str = "dc=prod,dc=rzbi,dc=saltation,dc=de";
+
+    #[test]
+    fn test_split_dn() {
+        assert_eq!(
+            split_dn("uid=foo, ou=people,dc=example"),
+            vec!["uid=foo", "ou=people", "dc=example"],
+            "whitespace around RDNs should be trimmed"
+        );
+        assert_eq!(
+            split_dn(r"cn=Doe\, John,ou=people"),
+            vec![r"cn=Doe\, John", "ou=people"],
+            "escaped commas should not split RDNs"
+        );
+        assert_eq!(split_dn(""), Vec::<&str>::new(), "the empty DN has no RDNs");
+    }
+
+    #[test]
+    fn test_classify_entry_missing() {
+        let requested = format!("ou=sshkeys,uid=foo,ou=people,{BASE}");
+        let matched = format!("uid=foo,ou=people,{BASE}");
+        assert_eq!(
+            NoSuchObject::classify(&requested, &matched).kind,
+            NoSuchObjectKind::EntryMissing,
+            "matched DN is the parent of the requested DN"
+        );
+    }
+
+    #[test]
+    fn test_classify_ancestor_missing() {
+        let requested = format!("ou=sshkeys,uid=foo,ou=people,{BASE}");
+        let matched = format!("ou=people,{BASE}");
+        assert_eq!(
+            NoSuchObject::classify(&requested, &matched).kind,
+            NoSuchObjectKind::AncestorMissing {
+                first_missing: format!("uid=foo,ou=people,{BASE}"),
+            },
+            "the first missing DN is the one directly below the matched DN"
+        );
+    }
+
+    #[test]
+    fn test_classify_ancestor_missing_ignores_case_and_spaces() {
+        let requested = format!("ou=sshkeys,uid=foo, ou=people,{BASE}");
+        let matched = format!("OU = People,{BASE}");
+        assert_eq!(
+            NoSuchObject::classify(&requested, &matched).kind,
+            NoSuchObjectKind::AncestorMissing {
+                first_missing: format!("uid=foo,ou=people,{BASE}"),
+            },
+            "case and whitespace differences should not prevent the classification"
+        );
+    }
+
+    #[test]
+    fn test_classify_top_level_ou_missing() {
+        let requested = format!("uid=foo,ou=peeple,{BASE}");
+        assert_eq!(
+            NoSuchObject::classify(&requested, BASE).kind,
+            NoSuchObjectKind::AncestorMissing {
+                first_missing: format!("ou=peeple,{BASE}"),
+            },
+            "a missing top-level OU below the base DN is a missing ancestor"
+        );
+    }
+
+    #[test]
+    fn test_classify_nothing_matched() {
+        let requested = "uid=foo,ou=people,dc=wrong,dc=de";
+        assert_eq!(
+            NoSuchObject::classify(requested, "").kind,
+            NoSuchObjectKind::NothingMatched,
+            "an empty matched DN means not even the base DN exists"
+        );
+    }
+
+    #[test]
+    fn test_classify_unrelated_matched() {
+        let requested = format!("uid=foo,ou=people,{BASE}");
+        let matched = format!("ou=devices,{BASE}");
+        assert_eq!(
+            NoSuchObject::classify(&requested, &matched).kind,
+            NoSuchObjectKind::Unclassified,
+            "a matched DN that is not an ancestor can not be classified"
+        );
+        assert_eq!(
+            NoSuchObject::classify(&requested, &requested).kind,
+            NoSuchObjectKind::Unclassified,
+            "a matched DN identical to the requested DN can not be classified"
+        );
+    }
+
+    #[test]
+    fn test_operation_failed_display() {
+        let error = LdapOperationError::OperationFailed {
+            operation: Box::new(FailedLdapOperation::Search {
+                base: format!("ou=sshkeys,uid=foo,ou=people,{BASE}"),
+                scope: Scope::OneLevel,
+                filter: "(objectClass=sshPublicKey)".to_string(),
+                attrs: vec!["sshPublicKeyFingerprint".to_string()],
+            }),
+            source: ldap3::LdapError::LdapResult {
+                result: ldap3::LdapResult {
+                    rc: 32,
+                    matched: format!("ou=people,{BASE}"),
+                    text: String::new(),
+                    refs: vec![],
+                    ctrls: vec![],
+                },
+            },
+        };
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "LDAP search (base: 'ou=sshkeys,uid=foo,ou=people,{BASE}', scope: one, filter: '(objectClass=sshPublicKey)', attributes: sshPublicKeyFingerprint) failed: 'uid=foo,ou=people,{BASE}' does not exist, so neither does 'ou=sshkeys,uid=foo,ou=people,{BASE}' (noSuchObject, deepest existing ancestor: 'ou=people,{BASE}')\n  to reproduce: ldapsearch -Q -LLL -o ldif-wrap=no -b 'ou=sshkeys,uid=foo,ou=people,{BASE}' -s one '(objectClass=sshPublicKey)' sshPublicKeyFingerprint"
+            ),
+            "the error message should contain the operation, the classification and the reproduction command"
+        );
+        assert!(
+            error.no_such_object().is_some(),
+            "the error should be classified as noSuchObject"
+        );
+    }
 }
