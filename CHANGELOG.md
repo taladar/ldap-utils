@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0 - 2026-11-17 15:03:58Z
+
+### 🚀 Features
+
+- [**breaking**] Include operation context and noSuchObject classification in
+  LDAP errors
+
 ## 0.7.0 - 2026-11-16 16:21:23Z
 
 ### ⚙️ Miscellaneous Tasks
