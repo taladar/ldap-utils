@@ -646,9 +646,9 @@ dependencies = [
 
 [[package]]
 name = "ldap-types"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a4727455d5a01083ab7264506b9de044a708539401543ce2b497b24a800ff25"
+checksum = "cd65af59d7efe115d34a0d4d4647bdfa3f86b39914c19cbd9013283a4672a816"
 dependencies = [
  "ariadne",
  "chumsky",
