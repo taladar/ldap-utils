@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.2 - 2026-11-24 09:21:21Z
+
+### 🐛 Bug Fixes
+
+- Do not emit deletes for entries below a deleted entry
+- *(dependencies)* Require ldap-types 0.8.2 for the total operation order
+
 ## 0.8.1 - 2026-11-23 11:28:21Z
 
 ### ⚙️ Miscellaneous Tasks
