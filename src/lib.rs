@@ -1599,12 +1599,54 @@ pub fn diff_entries(
         }
     }
 
+    let mut ldap_operations = without_covered_deletes(ldap_operations);
     ldap_operations.sort_by(|a, b| {
         a.operation_apply_cmp(b)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     Ok(ldap_operations)
+}
+
+/// split a DN into its RDNs normalized for comparison (see [normalize_rdn])
+fn normalized_rdns(dn: &str) -> Vec<String> {
+    split_dn(dn).into_iter().map(normalize_rdn).collect()
+}
+
+/// remove delete operations for entries below another entry that is deleted
+/// too
+///
+/// a delete is applied with [delete_recursive], which already removes the
+/// whole subtree, so the deletes of the descendants would only fail because
+/// their entries no longer exist
+fn without_covered_deletes(ldap_operations: Vec<LDAPOperation>) -> Vec<LDAPOperation> {
+    let deleted_dns: HashSet<Vec<String>> = ldap_operations
+        .iter()
+        .filter_map(|operation| match operation {
+            LDAPOperation::Delete { dn } => Some(normalized_rdns(dn)),
+            LDAPOperation::Add(_) | LDAPOperation::Modify { .. } => None,
+        })
+        .collect();
+    ldap_operations
+        .into_iter()
+        .filter(|operation| match operation {
+            LDAPOperation::Delete { dn } => {
+                let rdns = normalized_rdns(dn);
+                // every proper suffix of the RDN list is the DN of an ancestor
+                let covered = (1..rdns.len())
+                    .filter_map(|i| rdns.get(i..))
+                    .any(|ancestor| deleted_dns.contains(ancestor));
+                if covered {
+                    tracing::trace!(
+                        "Skipping delete of {} since an ancestor is deleted recursively",
+                        dn
+                    );
+                }
+                !covered
+            }
+            LDAPOperation::Add(_) | LDAPOperation::Modify { .. } => true,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1628,6 +1670,40 @@ mod test {
             "escaped commas should not split RDNs"
         );
         assert_eq!(split_dn(""), Vec::<&str>::new(), "the empty DN has no RDNs");
+    }
+
+    #[test]
+    fn test_without_covered_deletes() {
+        let delete = |dn: &str| LDAPOperation::Delete { dn: dn.to_string() };
+        let operations = vec![
+            delete("ou=accounts,cn=gone.example,ou=devices"),
+            delete("cn=gone.example,ou=devices"),
+            delete(r"uid=root,ou=accounts,CN=Gone.Example, ou=devices"),
+            delete(r"cn=gone.example\,other,ou=devices"),
+            delete("cn=other.example,ou=devices"),
+            LDAPOperation::Add(LDAPEntry {
+                dn: "ou=accounts,cn=gone.example,ou=devices".to_string(),
+                attrs: HashMap::new(),
+                bin_attrs: HashMap::new(),
+            }),
+        ];
+        assert_eq!(
+            without_covered_deletes(operations)
+                .iter()
+                .map(|operation| match operation {
+                    LDAPOperation::Delete { dn } => format!("delete {dn}"),
+                    LDAPOperation::Add(entry) => format!("add {}", entry.dn),
+                    LDAPOperation::Modify { dn, .. } => format!("modify {dn}"),
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                "delete cn=gone.example,ou=devices",
+                r"delete cn=gone.example\,other,ou=devices",
+                "delete cn=other.example,ou=devices",
+                "add ou=accounts,cn=gone.example,ou=devices",
+            ],
+            "deletes below a deleted entry should be dropped (case-insensitively, escaped commas respected), others kept"
+        );
     }
 
     #[test]
